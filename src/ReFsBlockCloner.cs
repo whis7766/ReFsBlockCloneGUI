@@ -1,12 +1,7 @@
-// ReFS Block Clone engine.
+// ReFS block-clone engine.
 // Port of refsblockclone.fixed.ps1 (original by Sergey Gruzdov, egel@egel.su),
-// with the following fixes carried over:
-//   1) non-cluster-aligned source sizes (dense or sparse): clone rounded up to
-//      the cluster boundary, then EOF shrunk back to the exact source size;
-//   2) destination must support block cloning AND be on the same volume;
-//   3) delete-pending set FIRST so no orphan file survives any later failure;
-//   4) output marked sparse (keeps sparse sources sparse);
-//   5) faithful Win32 error capture (code + message).
+// with these fixes: cluster-aligned clone + EOF shrink, same-volume check,
+// delete-pending-first cleanup, sparse output, and Win32 error capture.
 using System;
 using System.Runtime.InteropServices;
 
@@ -134,34 +129,34 @@ namespace ReFsBlockClone
             try
             {
                 // Open the source read-only (shared read).
-                _log("正在打开源文件...");
+                _log("打开源文件...");
                 hIn = NativeMethods.CreateFileW(inFile, NativeMethods.GENERIC_READ,
                     NativeMethods.FILE_SHARE_READ, IntPtr.Zero,
                     NativeMethods.OPEN_EXISTING, 0, IntPtr.Zero);
                 if (hIn == NativeMethods.INVALID_HANDLE_VALUE)
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法打开源文件 '" + inFile + "'");
+                    throw WinErr(Marshal.GetLastWin32Error(), "无法打开源文件：" + inFile);
 
                 // The source volume must support block refcounting (ReFS).
                 uint srcFlags; uint srcSerial;
                 if (!NativeMethods.GetVolumeInformationByHandleW(hIn, IntPtr.Zero, 0,
                         out srcSerial, IntPtr.Zero, out srcFlags, IntPtr.Zero, 0))
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法获取源文件所在卷的信息");
-                _log("源卷支持块克隆，卷序列号 0x" + srcSerial.ToString("X8"));
+                    throw WinErr(Marshal.GetLastWin32Error(), "无法获取源卷信息");
+                _log("源卷支持块克隆（卷序列号 0x" + srcSerial.ToString("X8") + "）");
 
                 if ((srcFlags & NativeMethods.FILE_SUPPORTS_BLOCK_REFCOUNTING) == 0)
-                    throw new CloneException("源卷不支持块克隆（不是 ReFS 或旧版 ReFS）！");
+                    throw new CloneException("源卷不支持块克隆（非 ReFS 或版本过旧）。");
 
                 ulong srcSize;
                 if (!NativeMethods.GetFileSizeEx(hIn, out srcSize))
                     throw WinErr(Marshal.GetLastWin32Error(), "无法获取源文件大小");
 
                 // CREATE_NEW never overwrites an existing destination.
-                _log("正在创建目标文件...");
+                _log("创建目标文件...");
                 hOut = NativeMethods.CreateFileW(outFile,
                     NativeMethods.GENERIC_READ | NativeMethods.GENERIC_WRITE | NativeMethods.DELETE,
                     0, IntPtr.Zero, NativeMethods.CREATE_NEW, 0, IntPtr.Zero);
                 if (hOut == NativeMethods.INVALID_HANDLE_VALUE)
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法创建目标文件 '" + outFile + "'");
+                    throw WinErr(Marshal.GetLastWin32Error(), "无法创建目标文件：" + outFile);
 
                 // Mark the output sparse so sparse sources stay sparse
                 // (harmless for dense files).
@@ -177,7 +172,7 @@ namespace ReFsBlockClone
                 Marshal.StructureToPtr(disp, buf, false);
                 if (!NativeMethods.SetFileInformationByHandle(hOut,
                         NativeMethods.FileDispositionInfo, buf, (uint)sizeDisp))
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法设置文件删除待决标记");
+                    throw WinErr(Marshal.GetLastWin32Error(), "无法设置删除待决标记");
                 Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
 
                 // The destination must support block cloning and be on the SAME
@@ -185,13 +180,13 @@ namespace ReFsBlockClone
                 uint dstFlags; uint dstSerial;
                 if (!NativeMethods.GetVolumeInformationByHandleW(hOut, IntPtr.Zero, 0,
                         out dstSerial, IntPtr.Zero, out dstFlags, IntPtr.Zero, 0))
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法获取目标文件所在卷的信息");
+                    throw WinErr(Marshal.GetLastWin32Error(), "无法获取目标卷信息");
 
                 if ((dstFlags & NativeMethods.FILE_SUPPORTS_BLOCK_REFCOUNTING) == 0)
-                    throw new CloneException("目标卷不支持块克隆！输出必须位于与源相同的 ReFS 卷上。");
+                    throw new CloneException("目标卷不支持块克隆，目标须与源位于同一 ReFS 卷。");
 
                 if (srcSerial != dstSerial)
-                    throw new CloneException("源和目标必须位于同一个 ReFS 卷上（卷序列号不匹配）！");
+                    throw new CloneException("源与目标必须位于同一 ReFS 卷（卷序列号不匹配）。");
 
                 // Read the source integrity info to learn the volume cluster size.
                 var gi = new FSCTL_GET_INTEGRITY_INFORMATION_BUFFER();
@@ -201,7 +196,7 @@ namespace ReFsBlockClone
                         IntPtr.Zero, 0, buf, (uint)sizeGi, out dummy, IntPtr.Zero))
                 {
                     Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法获取源文件的完整性信息");
+                    throw WinErr(Marshal.GetLastWin32Error(), "无法获取源文件完整性信息");
                 }
                 gi = (FSCTL_GET_INTEGRITY_INFORMATION_BUFFER)Marshal.PtrToStructure(buf, typeof(FSCTL_GET_INTEGRITY_INFORMATION_BUFFER));
                 Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
@@ -213,7 +208,7 @@ namespace ReFsBlockClone
                 // round the clone extent UP to the cluster boundary when the source
                 // size is not a multiple of the cluster size.
                 ulong alignedSize = ((srcSize + cluster - 1) / cluster) * cluster;
-                _log(string.Format("簇大小 {0} 字节 | 逻辑大小 {1} 字节 | 对齐大小 {2} 字节",
+                _log(string.Format("簇大小 {0} 字节，逻辑大小 {1} 字节，对齐大小 {2} 字节",
                     cluster, srcSize, alignedSize));
 
                 // The output EOF must be large enough to hold the aligned clone.
@@ -244,7 +239,7 @@ namespace ReFsBlockClone
                     IntPtr.Zero, 0, out dummy, IntPtr.Zero);
                 Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
                 if (!okSi)
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法设置目标文件的完整性信息");
+                    throw WinErr(Marshal.GetLastWin32Error(), "无法设置目标文件完整性信息");
 
                 // Clone loop in 100 MB chunks (all offsets/lengths are cluster multiples).
                 var dup = new DUPLICATE_EXTENTS_DATA { FileHandle = hIn.ToInt64() };
@@ -265,10 +260,10 @@ namespace ReFsBlockClone
                     {
                         Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
                         throw WinErr(Marshal.GetLastWin32Error(),
-                            string.Format("块克隆失败（偏移 {0}）", offset));
+                            string.Format("块克隆失败：偏移 {0}", offset));
                     }
                     offset += bc;
-                    _log(string.Format("  已克隆 {0} / {1} 字节", offset, alignedSize));
+                    _log(string.Format("  已克隆 {0}/{1} 字节", offset, alignedSize));
                 }
                 Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
 
@@ -283,8 +278,8 @@ namespace ReFsBlockClone
                         NativeMethods.FileEndOfFileInfo, buf, (uint)sizeEof);
                     Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
                     if (!okShrink)
-                        throw WinErr(Marshal.GetLastWin32Error(), "无法将目标文件收缩回源文件精确大小");
-                    _log("已将输出收缩回源文件的精确大小。");
+                        throw WinErr(Marshal.GetLastWin32Error(), "无法收缩目标到源文件大小");
+                    _log("已收缩到源文件精确大小。");
                 }
 
                 // Clear delete-pending so the output file survives.
@@ -295,7 +290,7 @@ namespace ReFsBlockClone
                     NativeMethods.FileDispositionInfo, buf, (uint)sizeDisp);
                 Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
                 if (!okClear)
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法清除文件删除待决标记");
+                    throw WinErr(Marshal.GetLastWin32Error(), "无法清除删除待决标记");
 
                 _log("克隆完成。");
             }
@@ -321,7 +316,7 @@ namespace ReFsBlockClone
         public int NativeErrorCode { get; private set; }
 
         public Win32ExceptionEx(int code, string what)
-            : base(string.Format("{0} (Win32 错误 0x{1:X})", what, (uint)code))
+            : base(string.Format("{0}（Win32 错误 0x{1:X}）", what, (uint)code))
         {
             NativeErrorCode = code;
         }

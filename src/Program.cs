@@ -23,8 +23,7 @@ namespace ReFsBlockClone
             if (args != null && args.Length >= 2)
                 return RunHeadless(args[0].Trim('"'), args[1].Trim('"'));
 
-            // Single-instance guard for GUI mode; a second launch just activates
-            // the existing window and exits.
+            // Single-instance guard: a second launch activates the existing window.
             bool createdNew;
             using (var mutex = new Mutex(true, MutexName, out createdNew))
             {
@@ -68,7 +67,7 @@ namespace ReFsBlockClone
         private static int RunHeadless(string src, string dst)
         {
             var logLines = new System.Collections.Generic.List<string>();
-            logLines.Add(string.Format("[{0}] headless clone {1} -> {2}",
+            logLines.Add(string.Format("[{0}] 无头克隆：{1} -> {2}",
                 DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), src, dst));
 
             int exit = 0;
@@ -78,12 +77,12 @@ namespace ReFsBlockClone
                 var cloner = new RefsBlockCloner(s => logLines.Add("  " + s));
                 cloner.Clone(src, dst);
                 sw.Stop();
-                logLines.Add(string.Format("OK in {0:0.000}s", sw.Elapsed.TotalSeconds));
+                logLines.Add(string.Format("成功，用时 {0:0.000} 秒。", sw.Elapsed.TotalSeconds));
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                logLines.Add("FAIL: " + ex.Message);
+                logLines.Add("失败：" + ex.Message);
                 exit = 1;
             }
 

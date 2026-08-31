@@ -32,7 +32,7 @@ namespace ReFsBlockClone
             // Source row
             var lblSource = new Label
             {
-                Text = "源文件（ReFS 卷上的原文件，可输入或浏览）：",
+                Text = "源文件（ReFS 卷上的原文件）：",
                 AutoSize = true
             };
             _txtSource.Anchor = AnchorStyles.Left | AnchorStyles.Right;
@@ -41,7 +41,7 @@ namespace ReFsBlockClone
             {
                 using (var dlg = new OpenFileDialog
                 {
-                    Title = "选择要克隆的源文件",
+                    Title = "选择源文件",
                     CheckFileExists = true,
                     Filter = "所有文件 (*.*)|*.*"
                 })
@@ -53,7 +53,7 @@ namespace ReFsBlockClone
             // Destination row
             var lblDest = new Label
             {
-                Text = "克隆到（目标路径与文件名，可输入或选择）：",
+                Text = "目标文件（新克隆的路径）：",
                 AutoSize = true
             };
             _txtDest.Anchor = AnchorStyles.Left | AnchorStyles.Right;
@@ -62,7 +62,7 @@ namespace ReFsBlockClone
             {
                 using (var dlg = new SaveFileDialog
                 {
-                    Title = "选择目标文件位置与名称",
+                    Title = "选择目标路径",
                     OverwritePrompt = false, // block clone never overwrites; checked in code
                     CheckPathExists = true,
                     Filter = "所有文件 (*.*)|*.*"
@@ -140,13 +140,13 @@ namespace ReFsBlockClone
 
             if (string.IsNullOrEmpty(src) || !File.Exists(src))
             {
-                MessageBox.Show(this, "请选择或输入一个已存在的源文件。", "提示",
+                MessageBox.Show(this, "请选择或输入已存在的源文件。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             if (string.IsNullOrEmpty(dst))
             {
-                MessageBox.Show(this, "请选择或输入目标文件路径与名称。", "提示",
+                MessageBox.Show(this, "请选择或输入目标文件路径。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -164,7 +164,7 @@ namespace ReFsBlockClone
                 }
                 if (File.Exists(fullDst))
                 {
-                    MessageBox.Show(this, "目标文件已存在。\n\n块克隆不会覆盖已有文件，请更换目标文件名。", "提示",
+                    MessageBox.Show(this, "目标文件已存在，块克隆不会覆盖已有文件，请更换目标文件名。", "提示",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
@@ -177,8 +177,8 @@ namespace ReFsBlockClone
                     !string.Equals(srcRoot, dstRoot, StringComparison.OrdinalIgnoreCase))
                 {
                     if (MessageBox.Show(this,
-                        "源文件与目标文件在不同盘符（" + srcRoot + " 与 " + dstRoot + "）。\n" +
-                        "块克隆要求源与目标位于同一 ReFS 卷，否则会失败。仍要继续吗？",
+                        "源文件与目标文件位于不同盘符（" + srcRoot + " 与 " + dstRoot + "）。\n" +
+                        "块克隆要求源与目标位于同一 ReFS 卷，继续可能失败。仍要继续吗？",
                         "跨卷提示", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                         return;
                 }
@@ -189,8 +189,8 @@ namespace ReFsBlockClone
             UpdateCloneEnabled();
             _btnClone.Text = "正在克隆...";
             _txtLog.Clear();
-            AppendLog("源文件   : " + src);
-            AppendLog("目标文件 : " + dst);
+            AppendLog("源文件：   " + src);
+            AppendLog("目标文件： " + dst);
             AppendLog("----------------------------------------");
 
             var sw = Stopwatch.StartNew();
@@ -211,7 +211,7 @@ namespace ReFsBlockClone
             {
                 sw.Stop();
                 AppendLog("----------------------------------------");
-                AppendLog("失败：" + ex.Message);
+                AppendLog("克隆失败：" + ex.Message);
                 if (!IsDisposed)
                     MessageBox.Show(this, "克隆失败：\n" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
