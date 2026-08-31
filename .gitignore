@@ -1,0 +1,15 @@
+# Build output
+bin/
+obj/
+x64/
+*.exe
+*.pdb
+*.dll
+
+# Visual Studio user files
+.vs/
+*.user
+*.suo
+
+# Local runtime log
+refsclone_headless.log

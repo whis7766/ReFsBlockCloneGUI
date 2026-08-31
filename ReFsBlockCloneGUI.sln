@@ -1,0 +1,27 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReFsBlockCloneGUI", "src\ReFsBlockCloneGUI.csproj", "{D5C20EB7-79AC-4D06-B574-DA1505B26DAE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReFsCloneTest", "test\ReFsCloneTest.csproj", "{276F23A0-9718-4006-AEB1-AA2BBF7F73A5}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D5C20EB7-79AC-4D06-B574-DA1505B26DAE}.Debug|x64.ActiveCfg = Debug|x64
+		{D5C20EB7-79AC-4D06-B574-DA1505B26DAE}.Debug|x64.Build.0 = Debug|x64
+		{D5C20EB7-79AC-4D06-B574-DA1505B26DAE}.Release|x64.ActiveCfg = Release|x64
+		{D5C20EB7-79AC-4D06-B574-DA1505B26DAE}.Release|x64.Build.0 = Release|x64
+		{276F23A0-9718-4006-AEB1-AA2BBF7F73A5}.Debug|x64.ActiveCfg = Debug|x64
+		{276F23A0-9718-4006-AEB1-AA2BBF7F73A5}.Debug|x64.Build.0 = Debug|x64
+		{276F23A0-9718-4006-AEB1-AA2BBF7F73A5}.Release|x64.ActiveCfg = Release|x64
+		{276F23A0-9718-4006-AEB1-AA2BBF7F73A5}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
