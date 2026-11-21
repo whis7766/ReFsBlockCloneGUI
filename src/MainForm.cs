@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,14 +9,22 @@ using System.Windows.Forms;
 
 namespace ReFsBlockClone
 {
-    /// <summary>
-    /// Dialog indirection so the headless GUI test harness can record and
-    /// answer message boxes instead of blocking on a real desktop.
-    /// </summary>
     internal static class UiHooks
     {
         public static Func<IWin32Window, string, string, MessageBoxButtons, MessageBoxIcon, DialogResult> ShowMessage =
             (owner, text, caption, buttons, icon) => MessageBox.Show(owner, text, caption, buttons, icon);
+
+        public static Func<IWin32Window, string, string> PickOpenFile = (owner, title) =>
+        {
+            using (var d = new OpenFileDialog { Title = title, CheckFileExists = true, Filter = "所有文件 (*.*)|*.*" })
+                return d.ShowDialog(owner) == DialogResult.OK ? d.FileName : null;
+        };
+
+        public static Func<IWin32Window, string, string> PickSaveFile = (owner, title) =>
+        {
+            using (var d = new SaveFileDialog { Title = title, OverwritePrompt = false, CheckPathExists = true, Filter = "所有文件 (*.*)|*.*" })
+                return d.ShowDialog(owner) == DialogResult.OK ? d.FileName : null;
+        };
     }
 
     internal sealed class InlineProgress : IProgress<CloneProgress>
@@ -25,19 +34,70 @@ namespace ReFsBlockClone
         public void Report(CloneProgress v) { _a(v); }
     }
 
+    internal static class Theme
+    {
+        public static readonly Color Bg = Color.FromArgb(246, 247, 249);
+        public static readonly Color Card = Color.White;
+        public static readonly Color Border = Color.FromArgb(229, 231, 235);
+        public static readonly Color Text = Color.FromArgb(17, 24, 39);
+        public static readonly Color Muted = Color.FromArgb(107, 114, 128);
+        public static readonly Color Accent = Color.FromArgb(37, 99, 235);
+        public static readonly Color Good = Color.FromArgb(22, 163, 74);
+        public static readonly Color Bad = Color.FromArgb(220, 38, 38);
+
+        public static GraphicsPath Round(Rectangle r, int radius)
+        {
+            var p = new GraphicsPath();
+            int d = radius * 2;
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+
+        public static void RoundControl(Control c, int radius)
+        {
+            if (c.Width <= 0 || c.Height <= 0) return;
+            using (var p = Round(new Rectangle(0, 0, c.Width, c.Height), radius))
+                c.Region = new Region(p);
+        }
+    }
+
+    internal sealed class Card : Panel
+    {
+        public Card()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
+            BackColor = Theme.Card;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var pen = new Pen(Theme.Border))
+            using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), 10))
+                e.Graphics.DrawPath(pen, path);
+        }
+    }
+
     public sealed class MainForm : Form
     {
-        private readonly TextBox _txtSource = new TextBox { Name = "txtSource" };
-        private readonly TextBox _txtDest = new TextBox { Name = "txtDest" };
-        private readonly Button _btnClone = new Button { Name = "btnClone" };
-        private readonly Button _btnCancel = new Button { Name = "btnCancel" };
-        private readonly ProgressBar _progress = new ProgressBar { Name = "progressBar" };
-        private readonly Label _lblPercent = new Label { Name = "lblPercent" };
-        private readonly Label _lblVolSrc = new Label { Name = "lblVolSrc" };
-        private readonly Label _lblVolDst = new Label { Name = "lblVolDst" };
-        private readonly TextBox _txtLog = new TextBox { Name = "txtLog" };
-        private readonly CheckBox _chkPhysical = new CheckBox { Name = "chkPhysical" };
-        private readonly Label _status = new Label { Name = "statusLabel" };
+        private static readonly Icon AppIcon = LoadAppIcon();
+
+        private TextBox _txtSource = new TextBox { Name = "txtSource" };
+        private TextBox _txtDest = new TextBox { Name = "txtDest" };
+        private Button _btnClone = new Button { Name = "btnClone" };
+        private Button _btnCancel = new Button { Name = "btnCancel" };
+        private Label _lblPercent = new Label { Name = "lblPercent" };
+        private Label _lblVolSrc = new Label { Name = "lblVolSrc" };
+        private Label _lblVolDst = new Label { Name = "lblVolDst" };
+        private TextBox _txtLog = new TextBox { Name = "txtLog" };
+        private CheckBox _chkPhysical = new CheckBox { Name = "chkPhysical" };
+        private Label _status = new Label { Name = "statusLabel" };
+        private PictureBox _logo = new PictureBox { Name = "picLogo" };
 
         private readonly System.Windows.Forms.Timer _probeTimer = new System.Windows.Forms.Timer { Interval = 300 };
         private int _probeSeq;
@@ -47,7 +107,6 @@ namespace ReFsBlockClone
         private bool _settingDest;
         private CancellationTokenSource _cts;
 
-        /// <summary>Test hook: replaces the default progress UI update.</summary>
         internal static Action<CloneProgress> ProgressOverride;
 
         internal string LogText { get { return _txtLog.Text; } }
@@ -55,158 +114,286 @@ namespace ReFsBlockClone
 
         public MainForm()
         {
+            Icon = AppIcon;
             BuildUi();
             _probeTimer.Tick += async (s, e) => { _probeTimer.Stop(); await ProbeVolumesAsync(); };
+        }
+
+        private static Icon LoadAppIcon()
+        {
+            try
+            {
+                using (var s = typeof(MainForm).Assembly.GetManifestResourceStream("ReFsBlockClone.app.ico"))
+                    if (s != null) return new Icon(s);
+            }
+            catch { }
+            try { return Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+            catch { return null; }
+        }
+
+        private Label Caption(string text)
+        {
+            return new Label
+            {
+                Text = text,
+                AutoSize = true,
+                Font = new Font("Microsoft YaHei UI", 8.5F),
+                ForeColor = Theme.Muted,
+                Margin = new Padding(0, 0, 0, 0)
+            };
+        }
+
+        private void StyleField(TextBox t)
+        {
+            t.Dock = DockStyle.Fill;
+            t.BorderStyle = BorderStyle.FixedSingle;
+            t.Font = new Font("Microsoft YaHei UI", 10F);
+            t.ForeColor = Theme.Text;
+            t.BackColor = Color.White;
+            t.Margin = new Padding(0, 0, 8, 0);
+        }
+
+        private Button GhostButton(string name, string text)
+        {
+            var b = new Button
+            {
+                Name = name,
+                Text = text,
+                Dock = DockStyle.Fill,
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand,
+                Font = new Font("Microsoft YaHei UI", 9F),
+                BackColor = Color.FromArgb(243, 244, 246),
+                ForeColor = Color.FromArgb(55, 65, 81),
+                UseVisualStyleBackColor = false,
+                Margin = new Padding(0, 0, 0, 0)
+            };
+            b.FlatAppearance.BorderSize = 0;
+            b.FlatAppearance.MouseOverBackColor = Color.FromArgb(235, 237, 240);
+            b.Resize += (s, e) => Theme.RoundControl(b, 7);
+            return b;
+        }
+
+        private Button PrimaryButton(string name, string text)
+        {
+            var b = new Button
+            {
+                Name = name,
+                Text = text,
+                Dock = DockStyle.Fill,
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand,
+                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
+                BackColor = Theme.Accent,
+                ForeColor = Color.White,
+                UseVisualStyleBackColor = false,
+                Margin = new Padding(0, 0, 0, 0)
+            };
+            b.FlatAppearance.BorderSize = 0;
+            b.FlatAppearance.MouseOverBackColor = Color.FromArgb(29, 78, 216);
+            b.Resize += (s, e) => Theme.RoundControl(b, 7);
+            return b;
+        }
+
+        private Card FileCard(string captionText, TextBox field, Button browse, Control extraTitle)
+        {
+            var card = new Card { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 10) };
+            var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = Color.Transparent };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F));
+            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            var titleHost = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent, Margin = new Padding(0) };
+            var cap = Caption(captionText);
+            cap.Location = new Point(0, 2);
+            titleHost.Controls.Add(cap);
+            if (extraTitle != null)
+            {
+                extraTitle.Dock = DockStyle.Right;
+                titleHost.Controls.Add(extraTitle);
+            }
+            grid.Controls.Add(titleHost, 0, 0);
+            grid.SetColumnSpan(titleHost, 2);
+
+            grid.Controls.Add(field, 0, 1);
+            grid.Controls.Add(browse, 1, 1);
+            card.Controls.Add(grid);
+            return card;
         }
 
         private void BuildUi()
         {
             Text = "ReFS 块克隆";
-            ClientSize = new Size(800, 620);
-            MinimumSize = new Size(680, 540);
+            ClientSize = new Size(832, 636);
+            MinimumSize = new Size(736, 560);
             StartPosition = FormStartPosition.CenterScreen;
-            Font = SystemFonts.MessageBoxFont;
+            BackColor = Theme.Bg;
+            Font = new Font("Microsoft YaHei UI", 9F);
+            DoubleBuffered = true;
             KeyPreview = true;
             AllowDrop = true;
             DragEnter += OnDragEnter;
             DragDrop += OnDragDrop;
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape && _busy) CancelClone(); };
 
-            // ---- source / destination groups ----
-            var grpSource = new GroupBox { Text = "源文件（ReFS 卷上的原文件）", Height = 66, Dock = DockStyle.Fill };
-            var tblSrc = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(8, 4, 8, 6) };
-            tblSrc.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            tblSrc.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96F));
-            _txtSource.Dock = DockStyle.Fill;
+            _logo.Size = new Size(42, 42);
+            _logo.Location = new Point(0, 6);
+            _logo.SizeMode = PictureBoxSizeMode.Zoom;
+            _logo.BackColor = Color.Transparent;
+            if (AppIcon != null) _logo.Image = AppIcon.ToBitmap();
+
+            var title = new Label
+            {
+                AutoSize = true,
+                Text = "ReFS 块克隆",
+                Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold),
+                ForeColor = Theme.Text,
+                Location = new Point(54, 4)
+            };
+            var subtitle = new Label
+            {
+                AutoSize = true,
+                Text = "共享物理簇 · 瞬时副本 · 写入接近零",
+                Font = new Font("Microsoft YaHei UI", 8.5F),
+                ForeColor = Theme.Muted,
+                Location = new Point(56, 32)
+            };
+
+            var header = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
+            header.Controls.Add(_logo);
+            header.Controls.Add(title);
+            header.Controls.Add(subtitle);
+
+            StyleField(_txtSource);
+            StyleField(_txtDest);
             _txtSource.AllowDrop = true;
             _txtSource.DragEnter += OnDragEnter;
             _txtSource.DragDrop += OnDragDrop;
-            var btnBrowseSource = new Button { Text = "浏览...", Dock = DockStyle.Fill, Name = "btnBrowseSource" };
-            btnBrowseSource.Click += (s, e) => BrowseSource();
-            tblSrc.Controls.Add(_txtSource, 0, 0);
-            tblSrc.Controls.Add(btnBrowseSource, 1, 0);
-            grpSource.Controls.Add(tblSrc);
 
-            var grpDest = new GroupBox { Text = "目标文件（同一 ReFS 卷上的新路径，不覆盖已有文件）", Height = 66, Dock = DockStyle.Fill };
-            var tblDst = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(8, 4, 8, 6) };
-            tblDst.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            tblDst.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96F));
-            _txtDest.Dock = DockStyle.Fill;
-            var btnBrowseDest = new Button { Text = "另存为...", Dock = DockStyle.Fill, Name = "btnBrowseDest" };
+            var btnBrowseSource = GhostButton("btnBrowseSource", "浏览");
+            btnBrowseSource.Margin = new Padding(0);
+            btnBrowseSource.Click += (s, e) =>
+            {
+                string p = UiHooks.PickOpenFile(this, "选择源文件");
+                if (!string.IsNullOrEmpty(p)) _txtSource.Text = p;
+            };
+
+            var btnBrowseDest = GhostButton("btnBrowseDest", "另存为");
+            btnBrowseDest.Margin = new Padding(0);
             btnBrowseDest.Click += (s, e) =>
             {
-                using (var dlg = new SaveFileDialog
-                {
-                    Title = "选择目标路径",
-                    OverwritePrompt = false,
-                    CheckPathExists = true,
-                    Filter = "所有文件 (*.*)|*.*"
-                })
-                    if (dlg.ShowDialog(this) == DialogResult.OK)
-                    {
-                        _destAuto = false;
-                        _txtDest.Text = dlg.FileName;
-                    }
+                string p = UiHooks.PickSaveFile(this, "选择目标路径");
+                if (!string.IsNullOrEmpty(p)) { _destAuto = false; _txtDest.Text = p; }
             };
-            tblDst.Controls.Add(_txtDest, 0, 0);
-            tblDst.Controls.Add(btnBrowseDest, 1, 0);
-            grpDest.Controls.Add(tblDst);
 
-            // ---- volume info ----
-            var grpVol = new GroupBox { Text = "卷信息", Height = 78, Dock = DockStyle.Fill };
-            var tblVol = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(8, 2, 8, 4) };
-            tblVol.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            tblVol.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            _lblVolSrc.Dock = DockStyle.Fill;
-            _lblVolSrc.TextAlign = ContentAlignment.MiddleLeft;
-            _lblVolSrc.Text = "源卷：待探测";
-            _lblVolDst.Dock = DockStyle.Fill;
-            _lblVolDst.TextAlign = ContentAlignment.MiddleLeft;
-            _lblVolDst.Text = "目标卷：待探测";
-            tblVol.Controls.Add(_lblVolSrc, 0, 0);
-            tblVol.Controls.Add(_lblVolDst, 0, 1);
-            grpVol.Controls.Add(tblVol);
-
-            // ---- strategy choice ----
-            _chkPhysical.Text = "物理复制模式（不共享物理块；跨卷可用；适合克隆后大量修改）";
+            _chkPhysical.Text = "物理复制（跨卷可用）";
             _chkPhysical.AutoSize = true;
-            _chkPhysical.Margin = new Padding(4, 6, 0, 0);
+            _chkPhysical.Font = new Font("Microsoft YaHei UI", 8.5F);
+            _chkPhysical.ForeColor = Theme.Muted;
+            _chkPhysical.BackColor = Color.Transparent;
+            _chkPhysical.Cursor = Cursors.Hand;
+            _chkPhysical.Margin = new Padding(0);
             _chkPhysical.CheckedChanged += (s, e) => KickProbe();
 
-            // ---- actions row ----
-            var pnlActions = new TableLayoutPanel { Height = 44, Dock = DockStyle.Fill, ColumnCount = 4 };
-            pnlActions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130F));
-            pnlActions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90F));
-            pnlActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            pnlActions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64F));
-            _btnClone.Text = "开始克隆";
-            _btnClone.Dock = DockStyle.Fill;
-            _btnClone.FlatStyle = FlatStyle.Flat;
-            _btnClone.BackColor = Color.FromArgb(0, 120, 212);
-            _btnClone.ForeColor = Color.White;
-            _btnClone.FlatAppearance.BorderSize = 0;
+            var cardSrc = FileCard("源文件", _txtSource, btnBrowseSource, null);
+            var cardDst = FileCard("目标文件 · 同一 ReFS 卷上的新路径", _txtDest, btnBrowseDest, _chkPhysical);
+
+            _lblVolSrc.AutoSize = false;
+            _lblVolSrc.Dock = DockStyle.Fill;
+            _lblVolSrc.TextAlign = ContentAlignment.MiddleLeft;
+            _lblVolSrc.Font = new Font("Microsoft YaHei UI", 8.5F);
+            _lblVolSrc.ForeColor = Theme.Muted;
+            _lblVolSrc.Text = "源文件：待探测";
+
+            _lblVolDst.AutoSize = false;
+            _lblVolDst.Dock = DockStyle.Fill;
+            _lblVolDst.TextAlign = ContentAlignment.MiddleLeft;
+            _lblVolDst.Font = new Font("Microsoft YaHei UI", 8.5F);
+            _lblVolDst.ForeColor = Theme.Muted;
+            _lblVolDst.Text = "目标：待探测";
+
+            var meta = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.Transparent };
+            meta.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            meta.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            meta.Controls.Add(_lblVolSrc, 0, 0);
+            meta.Controls.Add(_lblVolDst, 0, 1);
+
+            _btnClone = PrimaryButton("btnClone", "开始克隆");
             _btnClone.Enabled = false;
             _btnClone.Click += async (s, e) => await DoCloneAsync();
-            _btnCancel.Text = "取消";
-            _btnCancel.Dock = DockStyle.Fill;
+
+            _btnCancel = GhostButton("btnCancel", "取消");
             _btnCancel.Enabled = false;
             _btnCancel.Click += (s, e) => CancelClone();
-            _progress.Dock = DockStyle.Fill;
-            _progress.Minimum = 0;
-            _progress.Maximum = 1000;
+
+            _lblPercent.AutoSize = false;
             _lblPercent.Dock = DockStyle.Fill;
             _lblPercent.TextAlign = ContentAlignment.MiddleRight;
+            _lblPercent.Font = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold);
+            _lblPercent.ForeColor = Theme.Muted;
             _lblPercent.Text = "0%";
-            pnlActions.Controls.Add(_btnClone, 0, 0);
-            pnlActions.Controls.Add(_btnCancel, 1, 0);
-            pnlActions.Controls.Add(_progress, 2, 0);
-            pnlActions.Controls.Add(_lblPercent, 3, 0);
 
-            // ---- log ----
-            var grpLog = new GroupBox { Text = "日志", Dock = DockStyle.Fill };
+            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, BackColor = Color.Transparent };
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138F));
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104F));
+            actions.Controls.Add(_btnClone, 0, 0);
+            actions.Controls.Add(_btnCancel, 1, 0);
+            actions.Controls.Add(_lblPercent, 3, 0);
+
             _txtLog.Multiline = true;
             _txtLog.ReadOnly = true;
             _txtLog.ScrollBars = ScrollBars.Vertical;
             _txtLog.Dock = DockStyle.Fill;
+            _txtLog.BorderStyle = BorderStyle.None;
             _txtLog.Font = new Font("Consolas", 9F);
-            _txtLog.BackColor = Color.White;
-            grpLog.Controls.Add(_txtLog);
+            _txtLog.BackColor = Theme.Card;
+            _txtLog.ForeColor = Color.FromArgb(55, 65, 81);
+            _txtLog.Margin = new Padding(0);
 
-            // ---- root layout ----
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(10) };
+            var logCard = new Card { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 14, 12) };
+            var logGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.Transparent };
+            logGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 20F));
+            logGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            var logCap = Caption("日志");
+            logCap.Dock = DockStyle.Fill;
+            logGrid.Controls.Add(logCap, 0, 0);
+            logGrid.Controls.Add(_txtLog, 0, 1);
+            logCard.Controls.Add(logGrid);
+
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(18, 12, 18, 10), BackColor = Theme.Bg };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 82F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            root.Controls.Add(grpSource, 0, 0);
-            root.Controls.Add(grpDest, 0, 1);
-            root.Controls.Add(grpVol, 0, 2);
-            root.Controls.Add(_chkPhysical, 0, 3);
-            root.Controls.Add(pnlActions, 0, 4);
-            root.Controls.Add(grpLog, 0, 5);
+            root.Controls.Add(header, 0, 0);
+            root.Controls.Add(cardSrc, 0, 1);
+            root.Controls.Add(cardDst, 0, 2);
+            root.Controls.Add(meta, 0, 3);
+            root.Controls.Add(actions, 0, 4);
+            root.Controls.Add(logCard, 0, 5);
 
-            // Plain panel+label status bar: predictable under DrawToBitmap
-            // (the CI screenshot bitmap must be window-sized, see GuiSmokeTest).
-            var statusPanel = new Panel
+            var bar = new Panel { Dock = DockStyle.Bottom, Height = 28, BackColor = Color.White, Padding = new Padding(18, 0, 18, 0) };
+            bar.Paint += (s, e) =>
             {
-                Dock = DockStyle.Bottom,
-                Height = 26,
-                BackColor = SystemColors.Control,
-                Padding = new Padding(8, 0, 8, 0)
+                using (var pen = new Pen(Theme.Border))
+                    e.Graphics.DrawLine(pen, 0, 0, bar.Width, 0);
             };
-            statusPanel.Paint += (s, e) =>
-                e.Graphics.DrawLine(SystemPens.ControlDark, 0, 0, statusPanel.Width, 0);
             _status.Dock = DockStyle.Fill;
             _status.TextAlign = ContentAlignment.MiddleLeft;
             _status.AutoEllipsis = true;
-            _status.Text = "就绪。选择源文件与目标路径后开始克隆。";
-            statusPanel.Controls.Add(_status);
+            _status.Font = new Font("Microsoft YaHei UI", 8.5F);
+            _status.ForeColor = Theme.Muted;
+            _status.Text = "就绪，选择源文件与目标路径后开始克隆。";
+            bar.Controls.Add(_status);
 
             Controls.Add(root);
-            Controls.Add(statusPanel);
+            Controls.Add(bar);
 
             _txtSource.TextChanged += (s, e) => { SuggestDest(); KickProbe(); UpdateCloneEnabled(); };
             _txtDest.TextChanged += (s, e) => { if (!_settingDest) _destAuto = false; KickProbe(); UpdateCloneEnabled(); };
@@ -215,8 +402,8 @@ namespace ReFsBlockClone
 
         private void BrowseSource()
         {
-            using (var dlg = new OpenFileDialog { Title = "选择源文件", CheckFileExists = true, Filter = "所有文件 (*.*)|*.*" })
-                if (dlg.ShowDialog(this) == DialogResult.OK) _txtSource.Text = dlg.FileName;
+            string p = UiHooks.PickOpenFile(this, "选择源文件");
+            if (!string.IsNullOrEmpty(p)) _txtSource.Text = p;
         }
 
         private void OnDragEnter(object sender, DragEventArgs e)
@@ -272,38 +459,37 @@ namespace ReFsBlockClone
 
             if (_srcInfo == null)
             {
-                _lblVolSrc.Text = "源卷：无法探测（路径不存在或不可访问）";
-                _lblVolSrc.ForeColor = Color.FromArgb(160, 60, 60);
+                _lblVolSrc.Text = "源文件：无法探测（路径不存在或不可访问）";
+                _lblVolSrc.ForeColor = Theme.Bad;
             }
             else
             {
-                _lblVolSrc.Text = string.Format("源卷：{0} · 簇 {1} B · 完整性 streams：{2} · 稀疏：{3}",
+                _lblVolSrc.Text = string.Format("源文件：{0} · 簇 {1} B · 完整性 {2} · 稀疏 {3}",
                     _srcInfo.FileSystem, _srcInfo.ClusterSize,
                     _srcInfo.IntegrityEnabled ? "开" : "关", _srcInfo.IsSparse ? "是" : "否");
-                _lblVolSrc.ForeColor = _srcInfo.SupportsBlockClone ? Color.FromArgb(30, 110, 50) : Color.FromArgb(160, 60, 60);
+                _lblVolSrc.ForeColor = _srcInfo.SupportsBlockClone ? Theme.Muted : Theme.Bad;
             }
 
             if (_dstInfo == null)
             {
-                _lblVolDst.Text = "目标卷：待探测";
-                _lblVolDst.ForeColor = SystemColors.ControlText;
+                _lblVolDst.Text = "目标：待探测";
+                _lblVolDst.ForeColor = Theme.Muted;
             }
             else if (_srcInfo != null && _dstInfo.Serial == _srcInfo.Serial && _dstInfo.SupportsBlockClone)
             {
-                _lblVolDst.Text = string.Format("目标卷：与源同卷 ✓（{0}{1}）",
+                _lblVolDst.Text = string.Format("目标：与源同卷 ✓（{0}{1}）",
                     _dstInfo.FileSystem, _chkPhysical.Checked ? "；物理复制模式" : "，可块克隆");
-                _lblVolDst.ForeColor = Color.FromArgb(30, 110, 50);
+                _lblVolDst.ForeColor = Theme.Good;
             }
             else if (_chkPhysical.Checked)
             {
-                _lblVolDst.Text = string.Format("目标卷：{0}（物理复制模式：跨卷/非 ReFS 可用）", _dstInfo.FileSystem);
-                _lblVolDst.ForeColor = SystemColors.ControlText;
+                _lblVolDst.Text = string.Format("目标：{0}（物理复制可用）", _dstInfo.FileSystem);
+                _lblVolDst.ForeColor = Theme.Muted;
             }
             else
             {
-                _lblVolDst.Text = string.Format("目标卷：{0} —— 与源不同卷或不支持块克隆，克隆将被拒绝",
-                    _dstInfo.FileSystem);
-                _lblVolDst.ForeColor = Color.FromArgb(160, 60, 60);
+                _lblVolDst.Text = string.Format("目标：{0} —— 与源不同卷，块克隆将被拒绝", _dstInfo.FileSystem);
+                _lblVolDst.ForeColor = Theme.Bad;
             }
         }
 
@@ -337,10 +523,11 @@ namespace ReFsBlockClone
                 try { BeginInvoke((Action)(() => ApplyProgress(p))); } catch { }
                 return;
             }
-            int pct = p.TotalBytes > 0 ? (int)(p.BytesDone * 1000 / p.TotalBytes) : 1000;
-            _progress.Value = Math.Max(0, Math.Min(1000, pct));
-            _lblPercent.Text = (pct / 10) + "%";
-            _status.Text = string.Format("正在克隆：{0:0.0}/{1:0.0} MB",
+            int pct = p.TotalBytes > 0 ? (int)(p.BytesDone * 100 / p.TotalBytes) : 100;
+            _lblPercent.Text = pct + "%";
+            _lblPercent.ForeColor = Theme.Accent;
+            _status.ForeColor = Theme.Text;
+            _status.Text = string.Format("正在克隆：{0:0.0} / {1:0.0} MB",
                 p.BytesDone / 1048576.0, p.TotalBytes / 1048576.0);
         }
 
@@ -379,8 +566,6 @@ namespace ReFsBlockClone
                 return;
             }
 
-            // Same-volume check: prefer probed serials; fall back to drive roots.
-            // Physical mode legitimately crosses volumes, so no warning there.
             bool physical = _chkPhysical.Checked;
             bool crossVolume;
             if (_srcInfo != null && _dstInfo != null)
@@ -401,10 +586,10 @@ namespace ReFsBlockClone
 
             _busy = true;
             UpdateCloneEnabled();
-            _btnClone.Text = "正在克隆...";
+            _btnClone.Text = "正在克隆…";
             _btnCancel.Enabled = true;
-            _progress.Value = 0;
             _lblPercent.Text = "0%";
+            _lblPercent.ForeColor = Theme.Accent;
             _txtLog.Clear();
             AppendLog("源文件：   " + src);
             AppendLog("目标文件： " + dst);
@@ -412,8 +597,6 @@ namespace ReFsBlockClone
             AppendLog("----------------------------------------");
 
             _cts = new CancellationTokenSource();
-            // Synchronous reporter: the override hook (test harness) runs on the
-            // worker thread and may pause the clone loop deterministically.
             var progress = new InlineProgress(p =>
             {
                 var ov = ProgressOverride;
@@ -425,33 +608,37 @@ namespace ReFsBlockClone
             {
                 await Task.Run(() =>
                 {
-                    var cloner = new RefsBlockCloner(AppendLog);
+                    var cloner = new ReFsBlockCloner(AppendLog);
                     if (physical) cloner.ClonePhysical(src, dst, progress, _cts.Token);
                     else cloner.Clone(src, dst, progress, _cts.Token);
                 });
                 sw.Stop();
                 AppendLog("----------------------------------------");
                 AppendLog(string.Format("克隆完成，用时 {0:0.000} 秒。", sw.Elapsed.TotalSeconds));
-                _progress.Value = 1000;
                 _lblPercent.Text = "100%";
+                _lblPercent.ForeColor = Theme.Good;
                 _status.Text = string.Format("克隆完成，用时 {0:0.000} 秒。", sw.Elapsed.TotalSeconds);
-                _status.ForeColor = Color.FromArgb(30, 110, 50);
+                _status.ForeColor = Theme.Good;
             }
             catch (OperationCanceledException)
             {
                 sw.Stop();
                 AppendLog("----------------------------------------");
                 AppendLog("已取消，半成品目标已自动清理。");
+                _lblPercent.Text = "—";
+                _lblPercent.ForeColor = Theme.Muted;
                 _status.Text = "已取消，半成品目标已自动清理。";
-                _status.ForeColor = SystemColors.ControlText;
+                _status.ForeColor = Theme.Muted;
             }
             catch (Exception ex)
             {
                 sw.Stop();
                 AppendLog("----------------------------------------");
                 AppendLog("克隆失败：" + ex.Message);
+                _lblPercent.Text = "—";
+                _lblPercent.ForeColor = Theme.Muted;
                 _status.Text = "克隆失败。";
-                _status.ForeColor = Color.FromArgb(160, 60, 60);
+                _status.ForeColor = Theme.Bad;
                 if (!IsDisposed)
                     UiHooks.ShowMessage(this, "克隆失败：\n" + ex.Message, "错误",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
