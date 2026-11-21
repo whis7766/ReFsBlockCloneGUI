@@ -12,7 +12,6 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
-      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,18 +20,18 @@ jobs:
         with:
           msbuild-architecture: x64
       - name: Build Release x64
-        run: msbuild ReFsBlockCloneGUI.sln /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /m
+        run: msbuild ReFsBlockCloneGUI.sln /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /m /v:m
+      - name: Prepare ReFS test volume
+        run: powershell -ExecutionPolicy Bypass -File scripts\New-ReFsTestVolumes.ps1
+      - name: Quick engine verification before release
+        run: |
+          & test\x64\Release\ReFsCloneTest.exe R S quick *>&1 | Tee-Object -FilePath engine-test.log
+          exit $LASTEXITCODE
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag }}
-          files: src/x64/Release/ReFsBlockCloneGUI.exe
+          files: |
+            src/x64/Release/ReFsBlockCloneGUI.exe
+            src/x64/Release/ReFsBlockCloneGUI.exe.config
           generate_release_notes: true
-      - name: Cleanup Workflow Runs
-        uses: Mattraks/delete-workflow-runs@v2.1.0
-        if: always()
-        with:
-          token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          retain_days: 0
-          keep_minimum_runs: 0

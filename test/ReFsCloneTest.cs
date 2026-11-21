@@ -1,10 +1,12 @@
 // Console harness that compiles the SAME ReFsBlockCloner.cs used by the GUI and
-// verifies it end-to-end on a real ReFS volume.
-// Usage: ReFsCloneTest.exe <ReFS-drive-letter e.g. D> [quick]
+// verifies it end-to-end on real ReFS volumes.
+// Usage: ReFsCloneTest.exe <ReFS-drive e.g. R> [second-ReFS-drive e.g. S] [quick|full]
+//   R : 4K-cluster ReFS volume   S : 64K-cluster ReFS volume (optional but recommended)
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Threading;
 using ReFsBlockClone;
 
 internal static class ReFsCloneTest
@@ -33,12 +35,25 @@ internal static class ReFsCloneTest
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool WriteFile(IntPtr h, byte[] b, uint n, out uint w, IntPtr v);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileSizeEx(IntPtr h, out ulong sz);
+
+    private const uint GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000;
+    private const uint CREATE_ALWAYS = 2, OPEN_EXISTING = 3, FILE_BEGIN = 0;
+    private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+    private const uint FSCTL_SET_SPARSE = 0x000900C4;
+    private const uint FSCTL_GET_INTEGRITY_INFORMATION = 0x0009027C;
+    private const uint FSCTL_SET_INTEGRITY_INFORMATION = 0x0009C280;
+    private const uint FSCTL_DUPLICATE_EXTENTS_TO_FILE = 0x00098344;
 
     private static void Check(string name, bool cond)
     {
         Console.WriteLine((cond ? "  [PASS] " : "  [FAIL] ") + name);
         if (cond) _pass++; else _fail++;
     }
+
+    private static void Info(string msg) { Console.WriteLine("  [INFO] " + msg); }
 
     private static void CreateDense(string path, long size, int seed)
     {
@@ -59,8 +74,6 @@ internal static class ReFsCloneTest
 
     private static void DoCreateSparse(string path, long logical, long[][] regions)
     {
-        const uint GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000, CREATE_ALWAYS = 2, FILE_BEGIN = 0;
-        const uint FSCTL_SET_SPARSE = 0x000900C4;
         var h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, IntPtr.Zero, CREATE_ALWAYS, 0, IntPtr.Zero);
         if (h == new IntPtr(-1)) throw new IOException("create sparse failed: " + Marshal.GetLastWin32Error());
         uint dummy; DeviceIoControl(h, FSCTL_SET_SPARSE, IntPtr.Zero, 0, IntPtr.Zero, 0, out dummy, IntPtr.Zero);
@@ -80,6 +93,36 @@ internal static class ReFsCloneTest
     private static bool IsSparse(string p)
     {
         return (GetFileAttributesW(p) & FILE_ATTRIBUTE_SPARSE_FILE) != 0;
+    }
+
+    private static void SetIntegrity(string path, bool enable, bool isDir)
+    {
+        var h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0x1 | 0x2 | 0x4, IntPtr.Zero,
+            OPEN_EXISTING, isDir ? FILE_FLAG_BACKUP_SEMANTICS : 0, IntPtr.Zero);
+        if (h == new IntPtr(-1)) throw new IOException("open for integrity failed: " + Marshal.GetLastWin32Error());
+        var buf = Marshal.AllocHGlobal(8);
+        Marshal.WriteInt16(buf, 0, (short)(enable ? 2 : 0)); // CHECKSUM_TYPE_CRC64 / NONE
+        Marshal.WriteInt16(buf, 2, 0);
+        Marshal.WriteInt32(buf, 4, 0);
+        uint dummy;
+        bool ok = DeviceIoControl(h, FSCTL_SET_INTEGRITY_INFORMATION, buf, 8, IntPtr.Zero, 0, out dummy, IntPtr.Zero);
+        int err = Marshal.GetLastWin32Error();
+        Marshal.FreeHGlobal(buf);
+        CloseHandle(h);
+        if (!ok) throw new IOException("set integrity failed: " + err);
+    }
+
+    private static bool IntegrityEnabled(string path)
+    {
+        var h = CreateFileW(path, GENERIC_READ, 0x1 | 0x2 | 0x4, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+        if (h == new IntPtr(-1)) return false;
+        var buf = Marshal.AllocHGlobal(16);
+        uint dummy;
+        bool ok = DeviceIoControl(h, FSCTL_GET_INTEGRITY_INFORMATION, IntPtr.Zero, 0, buf, 16, out dummy, IntPtr.Zero);
+        ushort algo = ok ? (ushort)Marshal.ReadInt16(buf, 0) : (ushort)0;
+        Marshal.FreeHGlobal(buf);
+        CloseHandle(h);
+        return algo != 0;
     }
 
     private static string Sha(string p)
@@ -104,30 +147,43 @@ internal static class ReFsCloneTest
         return ok;
     }
 
+    private sealed class InlineProgress : IProgress<CloneProgress>
+    {
+        private readonly Action<CloneProgress> _a;
+        public InlineProgress(Action<CloneProgress> a) { _a = a; }
+        public void Report(CloneProgress v) { _a(v); }
+    }
+
     private static int Main(string[] args)
     {
         try
         {
-            string drive = (args.Length > 0 ? args[0] : "D").TrimEnd('\\', ':') + ":\\";
+            string drive = (args.Length > 0 ? args[0] : "R").TrimEnd('\\', ':') + ":\\";
+            string drive2 = args.Length > 1 && args[1] != "quick" && args[1] != "full"
+                ? args[1].TrimEnd('\\', ':') + ":\\" : null;
+            bool quick = args.Length > 0 && args[args.Length - 1] == "quick";
             string dir = Path.Combine(drive, "reftest");
-            bool quick = args.Length > 1 && args[1] == "quick";
             Directory.CreateDirectory(dir);
-            Console.WriteLine("== ReFS block-clone engine verification on " + drive + " (quick=" + quick + ") ==");
+            Console.WriteLine("== ReFS block-clone engine verification on " + drive +
+                (drive2 != null ? " + " + drive2 : "") + " (quick=" + quick + ") ==");
 
-            // 1) dense non-aligned (100MB + 12345)
+            long m100 = 100L * 1024 * 1024;
+
+            // [1] dense non-aligned (100MB + 12345): prefix block-clone + tail copy
             Console.WriteLine("\n[1] dense non-aligned 100MB+12345");
             var d1s = Path.Combine(dir, "d1.src"); var d1d = Path.Combine(dir, "d1.dst");
             File.Delete(d1s); File.Delete(d1d);
-            CreateDense(d1s, 100L * 1024 * 1024 + 12345, 7);
+            CreateDense(d1s, m100 + 12345, 7);
             string e1;
             bool ok1 = CloneOk(d1s, d1d, out e1);
             if (!ok1) Console.WriteLine("      ERR: " + e1);
             Check("clone exit", ok1);
             LenOk(d1d, new FileInfo(d1s).Length, "dst");
             if (File.Exists(d1d)) Check("content equal (SHA256)", Sha(d1s) == Sha(d1d));
+            if (File.Exists(d1d)) Check("dense source => dst NOT sparse", !IsSparse(d1d));
             File.Delete(d1s); File.Delete(d1d);
 
-            // 2) dense 8.231GB non-aligned (full scale)
+            // [2] dense 8.231GB non-aligned (full scale)
             if (!quick)
             {
                 Console.WriteLine("\n[2] dense 8.231GB+12345 (full scale)");
@@ -148,11 +204,10 @@ internal static class ReFsCloneTest
                 File.Delete(d2s); File.Delete(d2d);
             }
 
-            // 3) sparse non-aligned, tail partial cluster has data
+            // [3] sparse non-aligned, tail partial cluster HAS data
             Console.WriteLine("\n[3] sparse 100MB+12345, tail partial has data");
             var d3s = Path.Combine(dir, "d3.src"); var d3d = Path.Combine(dir, "d3.dst");
             File.Delete(d3s); File.Delete(d3d);
-            long m100 = 100L * 1024 * 1024;
             DoCreateSparse(d3s, m100 + 12345, new long[][] { new long[] { 0, 1 << 20 }, new long[] { m100 - 4096, 16384 } });
             string e3;
             bool ok3 = CloneOk(d3s, d3d, out e3);
@@ -163,7 +218,7 @@ internal static class ReFsCloneTest
             if (File.Exists(d3d)) Check("content equal (SHA256)", Sha(d3s) == Sha(d3d));
             File.Delete(d3s); File.Delete(d3d);
 
-            // 4) zero-byte
+            // [4] zero-byte
             Console.WriteLine("\n[4] zero-byte");
             var d4s = Path.Combine(dir, "d4.src"); var d4d = Path.Combine(dir, "d4.dst");
             File.Delete(d4s); File.Delete(d4d);
@@ -175,7 +230,7 @@ internal static class ReFsCloneTest
             LenOk(d4d, 0, "dst");
             File.Delete(d4s); File.Delete(d4d);
 
-            // 5) cross-volume must be REJECTED (ReFS -> NTFS)
+            // [5] cross-volume ReFS -> NTFS must be REJECTED, no orphan
             Console.WriteLine("\n[5] cross-volume (ReFS -> NTFS) must fail cleanly");
             var d5s = Path.Combine(dir, "d5.src");
             var d5d = Path.Combine(Path.GetTempPath(), "reftest_cross_" + Guid.NewGuid().ToString("N") + ".dst");
@@ -188,6 +243,175 @@ internal static class ReFsCloneTest
             Check("no orphan on NTFS", !File.Exists(d5d));
             File.Delete(d5s); File.Delete(d5d);
 
+            // [6] sparse with a HOLE in the tail (logical size beyond last write)
+            Console.WriteLine("\n[6] sparse 100MB+12345, tail is a hole");
+            var d6s = Path.Combine(dir, "d6.src"); var d6d = Path.Combine(dir, "d6.dst");
+            File.Delete(d6s); File.Delete(d6d);
+            DoCreateSparse(d6s, m100 + 12345, new long[][] { new long[] { 0, 1 << 20 }, new long[] { 50 * 1024 * 1024, 64 * 1024 } });
+            string e6;
+            bool ok6 = CloneOk(d6s, d6d, out e6);
+            if (!ok6) Console.WriteLine("      ERR: " + e6);
+            Check("clone exit", ok6);
+            LenOk(d6d, new FileInfo(d6s).Length, "dst");
+            if (File.Exists(d6d)) Check("dst still SPARSE", IsSparse(d6d));
+            if (File.Exists(d6d)) Check("content equal (SHA256)", Sha(d6s) == Sha(d6d));
+            File.Delete(d6s); File.Delete(d6d);
+
+            // [7] sub-cluster dense file (1000 bytes): pure tail copy path
+            Console.WriteLine("\n[7] sub-cluster dense 1000 bytes");
+            var d7s = Path.Combine(dir, "d7.src"); var d7d = Path.Combine(dir, "d7.dst");
+            File.Delete(d7s); File.Delete(d7d);
+            CreateDense(d7s, 1000, 11);
+            string e7;
+            bool ok7 = CloneOk(d7s, d7d, out e7);
+            if (!ok7) Console.WriteLine("      ERR: " + e7);
+            Check("clone exit", ok7);
+            if (File.Exists(d7d)) Check("content equal (SHA256)", Sha(d7s) == Sha(d7d));
+            File.Delete(d7s); File.Delete(d7d);
+
+            // [8] 64K-cluster volume: dense + sparse non-aligned
+            if (drive2 != null)
+            {
+                Console.WriteLine("\n[8] 64K-cluster volume " + drive2);
+                string dir2 = Path.Combine(drive2, "reftest");
+                Directory.CreateDirectory(dir2);
+                var d8s = Path.Combine(dir2, "d8.src"); var d8d = Path.Combine(dir2, "d8.dst");
+                File.Delete(d8s); File.Delete(d8d);
+                CreateDense(d8s, (1 << 20) + 777, 13);
+                string e8;
+                bool ok8 = CloneOk(d8s, d8d, out e8);
+                if (!ok8) Console.WriteLine("      ERR: " + e8);
+                Check("64K dense clone exit", ok8);
+                if (File.Exists(d8d)) Check("64K dense content equal", Sha(d8s) == Sha(d8d));
+                File.Delete(d8s); File.Delete(d8d);
+
+                var d8bs = Path.Combine(dir2, "d8b.src"); var d8bd = Path.Combine(dir2, "d8b.dst");
+                File.Delete(d8bs); File.Delete(d8bd);
+                DoCreateSparse(d8bs, (1 << 20) + 777, new long[][] { new long[] { 0, 4096 } });
+                string e8b;
+                bool ok8b = CloneOk(d8bs, d8bd, out e8b);
+                if (!ok8b) Console.WriteLine("      ERR: " + e8b);
+                Check("64K sparse clone exit", ok8b);
+                if (File.Exists(d8bd)) Check("64K sparse content equal", Sha(d8bs) == Sha(d8bd));
+                if (File.Exists(d8bd)) Check("64K sparse dst SPARSE", IsSparse(d8bd));
+                File.Delete(d8bs); File.Delete(d8bd);
+
+                // [9] cross-ReFS-volume must be REJECTED, no orphan
+                Console.WriteLine("\n[9] cross-ReFS-volume (" + drive + " -> " + drive2 + ") must fail cleanly");
+                var d9s = Path.Combine(dir, "d9.src"); var d9d = Path.Combine(dir2, "d9.dst");
+                File.Delete(d9s); File.Delete(d9d);
+                CreateDense(d9s, 1 << 20, 17);
+                string e9;
+                bool ok9 = CloneOk(d9s, d9d, out e9);
+                Check("clone rejected", !ok9);
+                if (!ok9) Console.WriteLine("      message: " + e9);
+                Check("no orphan on second ReFS volume", !File.Exists(d9d));
+                File.Delete(d9s); File.Delete(d9d);
+            }
+
+            // [10] integrity streams: enabled source; inherited-from-directory source
+            Console.WriteLine("\n[10] integrity streams matching");
+            var d10s = Path.Combine(dir, "d10.src"); var d10d = Path.Combine(dir, "d10.dst");
+            File.Delete(d10s); File.Delete(d10d);
+            CreateDense(d10s, (1 << 20) + 555, 19);
+            SetIntegrity(d10s, true, false);
+            Check("source integrity enabled", IntegrityEnabled(d10s));
+            string e10;
+            bool ok10 = CloneOk(d10s, d10d, out e10);
+            if (!ok10) Console.WriteLine("      ERR: " + e10);
+            Check("integrity-on clone exit", ok10);
+            if (File.Exists(d10d)) Check("dst integrity enabled", IntegrityEnabled(d10d));
+            if (File.Exists(d10d)) Check("content equal (SHA256)", Sha(d10s) == Sha(d10d));
+            File.Delete(d10s); File.Delete(d10d);
+
+            string dirInt = Path.Combine(dir, "intdir");
+            Directory.CreateDirectory(dirInt);
+            SetIntegrity(dirInt, true, true);
+            var d10bs = Path.Combine(dirInt, "inh.src"); var d10bd = Path.Combine(dir, "inh.dst");
+            File.Delete(d10bs); File.Delete(d10bd);
+            CreateDense(d10bs, (1 << 20) + 333, 23);
+            Check("source inherited integrity", IntegrityEnabled(d10bs));
+            string e10b;
+            bool ok10b = CloneOk(d10bs, d10bd, out e10b);
+            if (!ok10b) Console.WriteLine("      ERR: " + e10b);
+            Check("inherited-integrity clone exit (target must be switched off)", ok10b);
+            if (File.Exists(d10bd)) Check("dst integrity disabled to match", !IntegrityEnabled(d10bd));
+            if (File.Exists(d10bd)) Check("content equal (SHA256)", Sha(d10bs) == Sha(d10bd));
+            File.Delete(d10bs); File.Delete(d10bd);
+            SetIntegrity(dirInt, false, true);
+            Directory.Delete(dirInt, true);
+
+            // [11] cancellation mid-clone must clean the partial target
+            Console.WriteLine("\n[11] cancellation cleanup");
+            var d11s = Path.Combine(dir, "d11.src"); var d11d = Path.Combine(dir, "d11.dst");
+            File.Delete(d11s); File.Delete(d11d);
+            CreateDense(d11s, 300L * 1024 * 1024, 29);
+            var cts = new CancellationTokenSource();
+            bool cancelled = false;
+            try
+            {
+                new RefsBlockCloner(s => { }).Clone(d11s, d11d,
+                    new InlineProgress(p => { if (p.BytesDone > 0) cts.Cancel(); }), cts.Token);
+            }
+            catch (OperationCanceledException) { cancelled = true; }
+            catch (Exception ex) { Console.WriteLine("      unexpected: " + ex.Message); }
+            Check("OperationCanceledException raised", cancelled);
+            Check("no orphan after cancel", !File.Exists(d11d));
+            File.Delete(d11s); File.Delete(d11d);
+
+            // [12] DIAGNOSTIC: raw round-up clone on non-aligned source.
+            // [MS-FSA] 2.1.5.10.4 validates the source range against Source.Size,
+            // so this is expected to FAIL with ERROR_NOT_SUPPORTED (50). Recorded
+            // as evidence; either outcome is reported, not asserted.
+            Console.WriteLine("\n[12] diagnostic: raw round-up FSCTL on non-aligned source");
+            var d12s = Path.Combine(dir, "d12.src"); var d12d = Path.Combine(dir, "d12.dst");
+            File.Delete(d12s); File.Delete(d12d);
+            CreateDense(d12s, (1 << 20) + 12345, 31);
+            int rawErr = RawRoundUpClone(d12s, d12d);
+            Info("raw round-up FSCTL result: Win32 " + rawErr +
+                (rawErr == 0 ? " (succeeded)" : " (failed as [MS-FSA] predicts)"));
+            File.Delete(d12s); File.Delete(d12d);
+
+            // [13] reference-count cap: clone a 1-cluster source until ReFS refuses
+            if (!quick)
+            {
+                Console.WriteLine("\n[13] reference-count cap (expect ERROR_BLOCK_TOO_MANY_REFERENCES 347)");
+                var d13s = Path.Combine(dir, "d13.src");
+                File.Delete(d13s);
+                CreateDense(d13s, 4096, 37);
+                int successes = 0; int capErr = 0; string capDst = null;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                for (int i = 0; i < 8200; i++)
+                {
+                    string dst = Path.Combine(dir, "cap_" + i + ".dst");
+                    try
+                    {
+                        new RefsBlockCloner(s => { }).Clone(d13s, dst);
+                        successes++;
+                    }
+                    catch (Win32ExceptionEx wex)
+                    {
+                        capErr = wex.NativeErrorCode; capDst = dst;
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("      unexpected at " + i + ": " + ex.Message);
+                        capErr = -1; capDst = dst;
+                        break;
+                    }
+                }
+                sw.Stop();
+                Info("successful clones before refusal: " + successes + " in " +
+                    sw.Elapsed.TotalSeconds.ToString("0.0") + "s; refusal code " + capErr);
+                Check("refusal is ERROR_BLOCK_TOO_MANY_REFERENCES (347)", capErr == 347);
+                Check("refusal count within documented cap window [8170,8176]",
+                    successes >= 8170 && successes <= 8176);
+                Check("no orphan after refusal", capDst == null || !File.Exists(capDst));
+                for (int i = 0; i < successes; i++) File.Delete(Path.Combine(dir, "cap_" + i + ".dst"));
+                File.Delete(d13s);
+            }
+
             Console.WriteLine("\n==== RESULT: PASS=" + _pass + " FAIL=" + _fail + " ====");
             return _fail == 0 ? 0 : 1;
         }
@@ -198,6 +422,54 @@ internal static class ReFsCloneTest
             return 2;
         }
     }
+
+    // Raw FSCTL_DUPLICATE_EXTENTS_TO_FILE with the OLD round-up strategy,
+    // bypassing the engine, to record real ReFS behavior on non-aligned sizes.
+    private static int RawRoundUpClone(string src, string dst)
+    {
+        IntPtr hIn = IntPtr.Zero, hOut = IntPtr.Zero, buf = IntPtr.Zero;
+        try
+        {
+            hIn = CreateFileW(src, GENERIC_READ, 1, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+            if (hIn == new IntPtr(-1)) return Marshal.GetLastWin32Error();
+            ulong size; GetFileSizeEx(hIn, out size);
+            hOut = CreateFileW(dst, GENERIC_READ | GENERIC_WRITE | 0x10000, 0, IntPtr.Zero, CREATE_ALWAYS, 0, IntPtr.Zero);
+            if (hOut == new IntPtr(-1)) return Marshal.GetLastWin32Error();
+            ulong cluster = 4096;
+            buf = Marshal.AllocHGlobal(16);
+            uint dummy;
+            if (DeviceIoControl(hIn, FSCTL_GET_INTEGRITY_INFORMATION, IntPtr.Zero, 0, buf, 16, out dummy, IntPtr.Zero))
+                cluster = (uint)Marshal.ReadInt32(buf, 12);
+            Marshal.FreeHGlobal(buf);
+            ulong aligned = ((size + cluster - 1) / cluster) * cluster;
+            // EOF = aligned
+            buf = Marshal.AllocHGlobal(8);
+            Marshal.WriteInt64(buf, 0, (long)aligned);
+            SetFileInformationByHandle(hOut, 6, buf, 8);
+            Marshal.FreeHGlobal(buf);
+            // dup extents over the whole aligned range
+            buf = Marshal.AllocHGlobal(32);
+            Marshal.WriteIntPtr(buf, 0, hIn);
+            Marshal.WriteInt64(buf, 8, 0);
+            Marshal.WriteInt64(buf, 16, 0);
+            Marshal.WriteInt64(buf, 24, (long)aligned);
+            bool ok = DeviceIoControl(hOut, FSCTL_DUPLICATE_EXTENTS_TO_FILE, buf, 32, IntPtr.Zero, 0, out dummy, IntPtr.Zero);
+            int err = ok ? 0 : Marshal.GetLastWin32Error();
+            Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
+            return err;
+        }
+        finally
+        {
+            if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
+            if (hIn != IntPtr.Zero && hIn != new IntPtr(-1)) CloseHandle(hIn);
+            if (hOut != IntPtr.Zero && hOut != new IntPtr(-1)) CloseHandle(hOut);
+            File.Delete(dst);
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandle(IntPtr h, int cls, IntPtr info, uint sz);
 
     private static bool SampleEqual(string a, string b)
     {

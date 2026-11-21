@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Test mode: quick | full | auto"
+        required: false
+        default: "auto"
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Build Release x64
+        run: msbuild ReFsBlockCloneGUI.sln /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /m /v:m
+
+      - name: Prepare real ReFS test volumes (4K + 64K clusters)
+        run: powershell -ExecutionPolicy Bypass -File scripts\New-ReFsTestVolumes.ps1
+
+      - name: Decide test mode
+        id: mode
+        run: |
+          $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+          $m = "${{ github.event.inputs.mode }}"
+          if (-not $m -or $m -eq "auto") { $m = if ($free -gt 12) { "full" } else { "quick" } }
+          Write-Host "C: free ${free} GB -> test mode $m"
+          "mode=$m" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+
+      - name: Engine verification on real ReFS volumes
+        run: |
+          & test\x64\Release\ReFsCloneTest.exe R S ${{ steps.mode.outputs.mode }} *>&1 | Tee-Object -FilePath engine-test.log
+          $code = $LASTEXITCODE
+          Write-Host "engine exit code: $code"
+          exit $code
+
+      - name: Headless CLI check (success + cross-volume rejection)
+        run: |
+          $exe = "src\x64\Release\ReFsBlockCloneGUI.exe"
+          New-Item -ItemType Directory -Force -Path R:\cli | Out-Null
+          $src = "R:\cli\src.bin"; $dst = "R:\cli\dst.bin"
+          $bytes = New-Object byte[] (4MB + 123)
+          (New-Object Random 7).NextBytes($bytes)
+          [IO.File]::WriteAllBytes($src, $bytes)
+          & $exe $src $dst
+          $ok = $LASTEXITCODE
+          Write-Host "CLI success exit: $ok"
+          if ($ok -ne 0) { exit 1 }
+          if (-not (Test-Path $dst)) { Write-Host "dst missing"; exit 1 }
+          if ((Get-FileHash $src).Hash -ne (Get-FileHash $dst).Hash) { Write-Host "hash mismatch"; exit 1 }
+          & $exe $src "C:\cli_should_fail.dst"
+          $bad = $LASTEXITCODE
+          Write-Host "CLI cross-volume exit: $bad"
+          if ($bad -ne 1) { exit 1 }
+          if (Test-Path "C:\cli_should_fail.dst") { Write-Host "orphan on NTFS"; exit 1 }
+          Write-Host "--- headless log tail ---"
+          Get-Content refsclone_headless.log -Tail 25
+
+      - name: GUI smoke test with state screenshots
+        run: |
+          New-Item -ItemType Directory -Force -Path gui-shots | Out-Null
+          & test\x64\Release\GuiSmokeTest.exe R gui-shots C *>&1 | Tee-Object -FilePath gui-test.log
+          $code = $LASTEXITCODE
+          Write-Host "gui exit code: $code"
+          exit $code
+
+      - name: Upload test results, screenshots and binaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            engine-test.log
+            gui-test.log
+            gui-shots/*.png
+            refsclone_headless.log
+            src/x64/Release/ReFsBlockCloneGUI.exe
+            src/x64/Release/ReFsBlockCloneGUI.exe.config
+            test/x64/Release/ReFsCloneTest.exe
+            test/x64/Release/GuiSmokeTest.exe
+          if-no-files-found: warn
