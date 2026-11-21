@@ -399,51 +399,86 @@ namespace ReFsBlockClone
                 const uint BLK = 1024 * 1024;
                 var data = new byte[BLK];
                 long done = 0;
-                bool zeroOk = true;
                 uint n;
-                while (done < (long)srcSize)
+                List<long[]> ranges;
+                if (TryQueryAllocatedRanges(src, out ranges))
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    uint want = (uint)Math.Min(BLK, (long)srcSize - done);
-                    if (!NativeMethods.ReadFile(hIn, data, want, out n, IntPtr.Zero) || n == 0)
-                        throw WinErr(Marshal.GetLastWin32Error(), "读取源文件失败");
-                    bool allZero = true;
-                    for (int i = 0; i < n; i++) if (data[i] != 0) { allZero = false; break; }
-                    bool punched = false;
-                    if (srcSparse && allZero && zeroOk)
+                    // Range-driven copy: transfer ONLY allocated runs; the gaps
+                    // are never written, so holes are preserved exactly on any
+                    // sparse-capable destination and write volume is minimal.
+                    foreach (var r in ranges)
                     {
-                        var zd = new FILE_ZERO_DATA_INFORMATION
+                        long off = r[0], len = r[1], copied = 0;
+                        long np;
+                        if (!NativeMethods.SetFilePointerEx(hIn, off, out np, NativeMethods.FILE_BEGIN))
+                            throw WinErr(Marshal.GetLastWin32Error(), "无法定位源文件");
+                        while (copied < len)
                         {
-                            FileOffset = done,
-                            BeyondFinalZero = done + n
-                        };
-                        int sz = Marshal.SizeOf(typeof(FILE_ZERO_DATA_INFORMATION));
-                        IntPtr zb = Marshal.AllocHGlobal(sz);
-                        Marshal.StructureToPtr(zd, zb, false);
-                        uint dummy;
-                        punched = NativeMethods.DeviceIoControl(hOut,
-                            NativeMethods.FSCTL_SET_ZERO_DATA, zb, (uint)sz,
-                            IntPtr.Zero, 0, out dummy, IntPtr.Zero);
+                            cancellationToken.ThrowIfCancellationRequested();
+                            uint want = (uint)Math.Min(BLK, len - copied);
+                            if (!NativeMethods.ReadFile(hIn, data, want, out n, IntPtr.Zero) || n == 0)
+                                throw WinErr(Marshal.GetLastWin32Error(), "读取源文件失败");
+                            if (!NativeMethods.SetFilePointerEx(hOut, off + copied, out np, NativeMethods.FILE_BEGIN))
+                                throw WinErr(Marshal.GetLastWin32Error(), "无法定位目标文件");
+                            uint w;
+                            if (!NativeMethods.WriteFile(hOut, data, n, out w, IntPtr.Zero) || w != n)
+                                throw WinErr(Marshal.GetLastWin32Error(), "写入目标文件失败");
+                            copied += n;
+                            done = off + copied;
+                            if (progress != null) progress.Report(new CloneProgress(done, (long)srcSize));
+                        }
+                    }
+                    SetEof(hOut, srcSize); // ranges may end before EOF (trailing hole)
+                    if (progress != null) progress.Report(new CloneProgress((long)srcSize, (long)srcSize));
+                }
+                else
+                {
+                    // Fallback (no QUERY_ALLOCATED_RANGES): block scan + zero punch.
+                    bool zeroOk = true;
+                    while (done < (long)srcSize)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        uint want = (uint)Math.Min(BLK, (long)srcSize - done);
+                        if (!NativeMethods.ReadFile(hIn, data, want, out n, IntPtr.Zero) || n == 0)
+                            throw WinErr(Marshal.GetLastWin32Error(), "读取源文件失败");
+                        bool allZero = true;
+                        for (int i = 0; i < n; i++) if (data[i] != 0) { allZero = false; break; }
+                        bool punched = false;
+                        if (srcSparse && allZero && zeroOk)
+                        {
+                            var zd = new FILE_ZERO_DATA_INFORMATION
+                            {
+                                FileOffset = done,
+                                BeyondFinalZero = done + n
+                            };
+                            int sz = Marshal.SizeOf(typeof(FILE_ZERO_DATA_INFORMATION));
+                            IntPtr zb = Marshal.AllocHGlobal(sz);
+                            Marshal.StructureToPtr(zd, zb, false);
+                            uint dummy;
+                            punched = NativeMethods.DeviceIoControl(hOut,
+                                NativeMethods.FSCTL_SET_ZERO_DATA, zb, (uint)sz,
+                                IntPtr.Zero, 0, out dummy, IntPtr.Zero);
+                            if (!punched)
+                            {
+                                if (zeroOk)
+                                    _log("警告：FSCTL_SET_ZERO_DATA 打洞失败（Win32 " +
+                                        Marshal.GetLastWin32Error() + "），回退为写零（目标该段将占用物理空间）。");
+                                zeroOk = false; // fall back to writing zeros
+                            }
+                            Marshal.FreeHGlobal(zb);
+                        }
                         if (!punched)
                         {
-                            if (zeroOk)
-                                _log("警告：FSCTL_SET_ZERO_DATA 打洞失败（Win32 " +
-                                    Marshal.GetLastWin32Error() + "），回退为写零（目标该段将占用物理空间）。");
-                            zeroOk = false; // fall back to writing zeros
+                            long np;
+                            if (!NativeMethods.SetFilePointerEx(hOut, done, out np, NativeMethods.FILE_BEGIN))
+                                throw WinErr(Marshal.GetLastWin32Error(), "无法定位目标文件");
+                            uint w;
+                            if (!NativeMethods.WriteFile(hOut, data, n, out w, IntPtr.Zero) || w != n)
+                                throw WinErr(Marshal.GetLastWin32Error(), "写入目标文件失败");
                         }
-                        Marshal.FreeHGlobal(zb);
+                        done += n;
+                        if (progress != null) progress.Report(new CloneProgress(done, (long)srcSize));
                     }
-                    if (!punched)
-                    {
-                        long np;
-                        if (!NativeMethods.SetFilePointerEx(hOut, done, out np, NativeMethods.FILE_BEGIN))
-                            throw WinErr(Marshal.GetLastWin32Error(), "无法定位目标文件");
-                        uint w;
-                        if (!NativeMethods.WriteFile(hOut, data, n, out w, IntPtr.Zero) || w != n)
-                            throw WinErr(Marshal.GetLastWin32Error(), "写入目标文件失败");
-                    }
-                    done += n;
-                    if (progress != null) progress.Report(new CloneProgress(done, (long)srcSize));
                 }
                 _log(string.Format("物理复制 {0} 字节完成。", srcSize));
 

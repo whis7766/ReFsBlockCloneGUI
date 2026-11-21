@@ -140,6 +140,11 @@ internal static class ReFsCloneTest
             AccessControlSections.Group | AccessControlSections.Access;
         string sddlS = File.GetAccessControl(src).GetSecurityDescriptorSddlForm(sec);
         string sddlD = File.GetAccessControl(dst).GetSecurityDescriptorSddlForm(sec);
+        if (sddlS != sddlD)
+        {
+            Console.WriteLine("      SDDL src: " + sddlS);
+            Console.WriteLine("      SDDL dst: " + sddlD);
+        }
         Check("owner/group/DACL mirrored", sddlS == sddlD);
     }
 
