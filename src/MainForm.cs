@@ -304,8 +304,8 @@ namespace ReFsBlockClone
             DragDrop += OnDragDrop;
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape && _busy) CancelClone(); };
 
-            _logo.Size = new Size(42, 42);
-            _logo.Location = new Point(0, 6);
+            _logo.Size = new Size(36, 36);
+            _logo.Location = new Point(0, 8);
             _logo.SizeMode = PictureBoxSizeMode.Zoom;
             _logo.BackColor = Color.Transparent;
             if (AppIcon != null) _logo.Image = AppIcon.ToBitmap();
@@ -314,23 +314,14 @@ namespace ReFsBlockClone
             {
                 AutoSize = true,
                 Text = "ReFS 块克隆",
-                Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold),
+                Font = new Font("Microsoft YaHei UI", 14F, FontStyle.Bold),
                 ForeColor = Theme.Text,
-                Location = new Point(54, 4)
-            };
-            var subtitle = new Label
-            {
-                AutoSize = true,
-                Text = "共享物理簇 · 瞬时副本 · 写入接近零",
-                Font = new Font("Microsoft YaHei UI", 8.5F),
-                ForeColor = Theme.Muted,
-                Location = new Point(56, 32)
+                Location = new Point(48, 14)
             };
 
             var header = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
             header.Controls.Add(_logo);
             header.Controls.Add(title);
-            header.Controls.Add(subtitle);
 
             StyleField(_txtSource);
             StyleField(_txtDest);
@@ -352,7 +343,7 @@ namespace ReFsBlockClone
                 if (!string.IsNullOrEmpty(p)) { _destAuto = false; _txtDest.Text = p; }
             };
 
-            _chkPhysical.Text = "物理复制（跨卷可用）";
+            _chkPhysical.Text = "物理复制";
             _chkPhysical.AutoSize = true;
             _chkPhysical.Font = new Font("Microsoft YaHei UI", 8.5F);
             _chkPhysical.ForeColor = Theme.Muted;
@@ -362,7 +353,7 @@ namespace ReFsBlockClone
             _chkPhysical.CheckedChanged += (s, e) => KickProbe();
 
             var cardSrc = FileCard("源文件", _txtSource, btnBrowseSource, null);
-            var cardDst = FileCard("目标文件 · 同一 ReFS 卷上的新路径", _txtDest, btnBrowseDest, _chkPhysical);
+            var cardDst = FileCard("目标文件", _txtDest, btnBrowseDest, _chkPhysical);
 
             _lblVolSrc.AutoSize = false;
             _lblVolSrc.Dock = DockStyle.Fill;
@@ -431,7 +422,7 @@ namespace ReFsBlockClone
 
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(18, 12, 18, 10), BackColor = Theme.Bg };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
@@ -455,7 +446,7 @@ namespace ReFsBlockClone
             _status.AutoEllipsis = true;
             _status.Font = new Font("Microsoft YaHei UI", 8.5F);
             _status.ForeColor = Theme.Muted;
-            _status.Text = "就绪，选择源文件与目标路径后开始克隆。";
+            _status.Text = "就绪";
             bar.Controls.Add(_status);
 
             Controls.Add(root);
@@ -543,18 +534,18 @@ namespace ReFsBlockClone
             }
             else if (_srcInfo != null && _dstInfo.Serial == _srcInfo.Serial && _dstInfo.SupportsBlockClone)
             {
-                _lblVolDst.Text = string.Format("目标：与源同卷 ✓（{0}{1}）",
-                    _dstInfo.FileSystem, _chkPhysical.Checked ? "；物理复制模式" : "，可块克隆");
+                _lblVolDst.Text = string.Format("目标：同卷 · {0}{1}",
+                    _dstInfo.FileSystem, _chkPhysical.Checked ? " · 物理复制" : "");
                 _lblVolDst.ForeColor = Theme.Good;
             }
             else if (_chkPhysical.Checked)
             {
-                _lblVolDst.Text = string.Format("目标：{0}（物理复制可用）", _dstInfo.FileSystem);
+                _lblVolDst.Text = string.Format("目标：{0} · 物理复制", _dstInfo.FileSystem);
                 _lblVolDst.ForeColor = Theme.Muted;
             }
             else
             {
-                _lblVolDst.Text = string.Format("目标：{0} —— 与源不同卷，块克隆将被拒绝", _dstInfo.FileSystem);
+                _lblVolDst.Text = "目标：不同卷，块克隆将被拒绝";
                 _lblVolDst.ForeColor = Theme.Bad;
             }
         }
