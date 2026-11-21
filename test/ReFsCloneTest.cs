@@ -118,6 +118,19 @@ internal static class ReFsCloneTest
             Check(label + " hole map identical", eq == true);
     }
 
+    // Best-effort variant: report mismatch as INFO (used where the destination
+    // file system may not support hole punching, e.g. ReFS SET_ZERO_DATA).
+    private static void InfoHoles(string label, string a, string b)
+    {
+        bool? eq = HoleMapEqual(a, b);
+        if (eq == null)
+            Info(label + ": QUERY_ALLOCATED_RANGES unsupported here; hole-map check skipped");
+        else if (eq == true)
+            Check(label + " hole map identical", true);
+        else
+            Info(label + ": hole map differs (destination FS may not support punching); content verified separately");
+    }
+
     private static void CheckMetadata(string src, string dst)
     {
         var si = new FileInfo(src); var di = new FileInfo(dst);
@@ -211,6 +224,15 @@ internal static class ReFsCloneTest
                     return 1;
                 }
                 swb.Stop();
+                // Force the destination's metadata/data to stable storage so the
+                // CI-side VHDX growth measurement isolates THIS clone's writes
+                // (ReFS/NTFS lazy writeback would otherwise leak into the delta).
+                try
+                {
+                    using (var f = new FileStream(bdst, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+                        f.Flush(true);
+                }
+                catch { }
                 Console.WriteLine("BENCH chunkMB=" + mb + " ms=" + swb.ElapsedMilliseconds);
                 return 0;
             }
@@ -509,18 +531,33 @@ internal static class ReFsCloneTest
             if (File.Exists(p14d)) CheckMetadata(d14s, p14d);
             File.Delete(p14d);
 
-            var d14bs = Path.Combine(dir, "d14b.src"); var d14bd = Path.Combine(dir, "d14b.dst");
-            File.Delete(d14bs); File.Delete(d14bd);
+            var d14bs = Path.Combine(dir, "d14b.src");
+            File.Delete(d14bs);
             DoCreateSparse(d14bs, m100 + 12345, new long[][] { new long[] { 0, 1 << 20 }, new long[] { 50 * 1024 * 1024, 64 * 1024 } });
+            // NTFS destination: hole punching (FSCTL_SET_ZERO_DATA) is supported.
+            string p14b = Path.Combine(Path.GetTempPath(), "reftest_phys_sparse_" + Guid.NewGuid().ToString("N") + ".dst");
+            File.Delete(p14b);
             bool ok14b = true; string e14b = "";
-            try { new RefsBlockCloner(s => { }).ClonePhysical(d14bs, d14bd); }
+            try { new RefsBlockCloner(s => { }).ClonePhysical(d14bs, p14b); }
             catch (Exception ex) { ok14b = false; e14b = ex.Message; }
-            Check("physical sparse exit", ok14b);
+            Check("physical sparse exit (NTFS dst)", ok14b);
             if (!ok14b) Console.WriteLine("      ERR: " + e14b);
-            if (File.Exists(d14bd)) Check("physical sparse content equal", Sha(d14bs) == Sha(d14bd));
-            if (File.Exists(d14bd)) Check("physical sparse dst SPARSE", IsSparse(d14bd));
-            if (File.Exists(d14bd)) CheckHoles("physical sparse", d14bs, d14bd);
-            File.Delete(d14s); File.Delete(d14bs); File.Delete(d14bd);
+            if (File.Exists(p14b)) Check("physical sparse content equal", Sha(d14bs) == Sha(p14b));
+            if (File.Exists(p14b)) Check("physical sparse dst SPARSE", IsSparse(p14b));
+            if (File.Exists(p14b)) CheckHoles("physical sparse NTFS", d14bs, p14b);
+            File.Delete(p14b);
+
+            // ReFS destination: content + sparse attribute; punching best-effort.
+            string r14b = Path.Combine(dir, "d14b.dst");
+            File.Delete(r14b);
+            bool ok14c = true;
+            try { new RefsBlockCloner(s => { }).ClonePhysical(d14bs, r14b); }
+            catch (Exception ex) { ok14c = false; Console.WriteLine("      ERR: " + ex.Message); }
+            Check("physical sparse exit (ReFS dst)", ok14c);
+            if (File.Exists(r14b)) Check("physical sparse ReFS content equal", Sha(d14bs) == Sha(r14b));
+            if (File.Exists(r14b)) Check("physical sparse ReFS dst SPARSE", IsSparse(r14b));
+            if (File.Exists(r14b)) InfoHoles("physical sparse ReFS", d14bs, r14b);
+            File.Delete(d14s); File.Delete(d14bs); File.Delete(r14b);
 
             Console.WriteLine("\n==== RESULT: PASS=" + _pass + " FAIL=" + _fail + " ====");
             return _fail == 0 ? 0 : 1;

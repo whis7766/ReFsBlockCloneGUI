@@ -97,6 +97,8 @@ namespace ReFsBlockClone
         public const uint GENERIC_READ = 0x80000000;
         public const uint GENERIC_WRITE = 0x40000000;
         public const uint DELETE = 0x00010000;
+        public const uint WRITE_DAC = 0x00040000;
+        public const uint WRITE_OWNER = 0x00080000;
         public const uint FILE_SHARE_READ = 0x00000001;
         public const uint OPEN_EXISTING = 3;
         public const uint CREATE_NEW = 1;
@@ -327,7 +329,11 @@ namespace ReFsBlockClone
                 }
                 Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
 
+                // A progress callback may cancel during the last (or only) chunk;
+                // re-check before tail/metadata so cancellation always cleans up.
+                cancellationToken.ThrowIfCancellationRequested();
                 CopyTail(hIn, hOut, prefix, tail, srcSparse);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (progress != null) progress.Report(new CloneProgress((long)srcSize, (long)srcSize));
 
                 CopyMetadata(hIn, hOut);
@@ -418,7 +424,13 @@ namespace ReFsBlockClone
                         punched = NativeMethods.DeviceIoControl(hOut,
                             NativeMethods.FSCTL_SET_ZERO_DATA, zb, (uint)sz,
                             IntPtr.Zero, 0, out dummy, IntPtr.Zero);
-                        if (!punched) zeroOk = false; // fall back to writing zeros
+                        if (!punched)
+                        {
+                            if (zeroOk)
+                                _log("警告：FSCTL_SET_ZERO_DATA 打洞失败（Win32 " +
+                                    Marshal.GetLastWin32Error() + "），回退为写零（目标该段将占用物理空间）。");
+                            zeroOk = false; // fall back to writing zeros
+                        }
                         Marshal.FreeHGlobal(zb);
                     }
                     if (!punched)
@@ -500,7 +512,8 @@ namespace ReFsBlockClone
         {
             _log("创建目标文件...");
             hOut = NativeMethods.CreateFileW(dst,
-                NativeMethods.GENERIC_READ | NativeMethods.GENERIC_WRITE | NativeMethods.DELETE,
+                NativeMethods.GENERIC_READ | NativeMethods.GENERIC_WRITE | NativeMethods.DELETE |
+                NativeMethods.WRITE_DAC | NativeMethods.WRITE_OWNER,
                 0, IntPtr.Zero, NativeMethods.CREATE_NEW, 0, IntPtr.Zero);
             if (hOut == NativeMethods.INVALID_HANDLE_VALUE)
                 throw WinErr(Marshal.GetLastWin32Error(), "无法创建目标文件：" + display);

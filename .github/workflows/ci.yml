@@ -47,6 +47,7 @@ jobs:
           $rng = New-Object Random 5
           $fs = [IO.File]::Create($src)
           for ($i = 0; $i -lt 2048; $i++) { $rng.NextBytes($buf); $fs.Write($buf, 0, $buf.Length) }
+          $fs.Flush($true)
           $fs.Close()
           $lines = @()
           foreach ($mb in @(100, 1024, 3072)) {
@@ -61,8 +62,10 @@ jobs:
           $src2 = "R:\bench\src_int.bin"
           $fs = [IO.File]::Create($src2)
           for ($i = 0; $i -lt 1024; $i++) { $rng.NextBytes($buf); $fs.Write($buf, 0, $buf.Length) }
+          $fs.Flush($true)
           $fs.Close()
           Set-FileIntegrity -FileName $src2 -Enable $True
+          $f2 = [IO.File]::Open($src2, 'Open', 'ReadWrite', 'Read'); $f2.Flush($true); $f2.Close()
           $before = (Get-Item $vhdx).Length
           $out = & test\x64\Release\ReFsCloneTest.exe bench $src2 "R:\bench\dst_int.bin" 1024
           $after = (Get-Item $vhdx).Length
