@@ -608,7 +608,7 @@ namespace ReFsBlockClone
             {
                 await Task.Run(() =>
                 {
-                    var cloner = new ReFsBlockCloner(AppendLog);
+                    var cloner = new RefsBlockCloner(AppendLog);
                     if (physical) cloner.ClonePhysical(src, dst, progress, _cts.Token);
                     else cloner.Clone(src, dst, progress, _cts.Token);
                 });
