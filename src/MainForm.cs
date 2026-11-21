@@ -71,15 +71,93 @@ namespace ReFsBlockClone
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                      ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-            BackColor = Theme.Card;
+            BackColor = Theme.Bg;
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var r = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var path = Theme.Round(r, 10))
+            using (var fill = new SolidBrush(Theme.Card))
+                e.Graphics.FillPath(fill, path);
+            using (var path = Theme.Round(r, 10))
             using (var pen = new Pen(Theme.Border))
-            using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), 10))
                 e.Graphics.DrawPath(pen, path);
+        }
+    }
+
+    internal sealed class FieldPanel : Panel
+    {
+        public readonly TextBox Field;
+
+        public FieldPanel(TextBox field)
+        {
+            Field = field;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
+            BackColor = Theme.Bg;
+            field.BorderStyle = BorderStyle.None;
+            field.BackColor = Color.FromArgb(243, 244, 246);
+            field.ForeColor = Theme.Text;
+            field.Font = new Font("Microsoft YaHei UI", 10F);
+            field.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
+            Controls.Add(field);
+            Resize += (s, e) => LayoutField();
+            LayoutField();
+        }
+
+        private void LayoutField()
+        {
+            Field.Left = 12;
+            Field.Width = Math.Max(10, Width - 24);
+            Field.Top = Math.Max(4, (Height - Field.Height) / 2);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), 8))
+            using (var fill = new SolidBrush(Color.FromArgb(243, 244, 246)))
+                e.Graphics.FillPath(fill, path);
+        }
+    }
+
+    internal sealed class RoundButton : Button
+    {
+        public Color FillColor = Theme.Accent;
+        public Color HoverColor = Color.FromArgb(29, 78, 216);
+        public Color BorderColor = Color.Transparent;
+        public int Radius = 7;
+        private bool _hover;
+
+        public RoundButton()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
+            FlatStyle = FlatStyle.Flat;
+            UseVisualStyleBackColor = false;
+            Cursor = Cursors.Hand;
+            MouseEnter += (s, e) => { _hover = true; Invalidate(); };
+            MouseLeave += (s, e) => { _hover = false; Invalidate(); };
+            EnabledChanged += (s, e) => Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            Color fill = !Enabled ? Color.FromArgb(229, 231, 235)
+                        : _hover ? HoverColor : FillColor;
+            using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), Radius))
+            using (var brush = new SolidBrush(fill))
+                e.Graphics.FillPath(brush, path);
+            if (BorderColor != Color.Transparent)
+                using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), Radius))
+                using (var pen = new Pen(BorderColor))
+                    e.Graphics.DrawPath(pen, path);
+            Color text = !Enabled ? Color.FromArgb(156, 163, 175) : ForeColor;
+            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, text,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
     }
 
@@ -145,66 +223,53 @@ namespace ReFsBlockClone
 
         private void StyleField(TextBox t)
         {
-            t.Dock = DockStyle.Fill;
-            t.BorderStyle = BorderStyle.FixedSingle;
-            t.Font = new Font("Microsoft YaHei UI", 10F);
-            t.ForeColor = Theme.Text;
-            t.BackColor = Color.White;
-            t.Margin = new Padding(0, 0, 8, 0);
+            t.Margin = new Padding(0);
         }
 
         private Button GhostButton(string name, string text)
         {
-            var b = new Button
+            var b = new RoundButton
             {
                 Name = name,
                 Text = text,
                 Dock = DockStyle.Fill,
-                FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand,
+                BackColor = Theme.Card,
                 Font = new Font("Microsoft YaHei UI", 9F),
-                BackColor = Color.FromArgb(243, 244, 246),
+                FillColor = Color.FromArgb(243, 244, 246),
+                HoverColor = Color.FromArgb(233, 235, 239),
                 ForeColor = Color.FromArgb(55, 65, 81),
-                UseVisualStyleBackColor = false,
-                Margin = new Padding(0, 0, 0, 0)
+                Margin = new Padding(0, 7, 0, 7)
             };
-            b.FlatAppearance.BorderSize = 0;
-            b.FlatAppearance.MouseOverBackColor = Color.FromArgb(235, 237, 240);
-            b.Resize += (s, e) => Theme.RoundControl(b, 7);
             return b;
         }
 
         private Button PrimaryButton(string name, string text)
         {
-            var b = new Button
+            var b = new RoundButton
             {
                 Name = name,
                 Text = text,
                 Dock = DockStyle.Fill,
-                FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand,
+                BackColor = Theme.Bg,
                 Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
-                BackColor = Theme.Accent,
+                FillColor = Theme.Accent,
+                HoverColor = Color.FromArgb(29, 78, 216),
                 ForeColor = Color.White,
-                UseVisualStyleBackColor = false,
-                Margin = new Padding(0, 0, 0, 0)
+                Margin = new Padding(0, 6, 0, 6)
             };
-            b.FlatAppearance.BorderSize = 0;
-            b.FlatAppearance.MouseOverBackColor = Color.FromArgb(29, 78, 216);
-            b.Resize += (s, e) => Theme.RoundControl(b, 7);
             return b;
         }
 
         private Card FileCard(string captionText, TextBox field, Button browse, Control extraTitle)
         {
-            var card = new Card { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 10) };
-            var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = Color.Transparent };
+            var card = new Card { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 10), BackColor = Theme.Bg };
+            var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = Theme.Card };
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F));
             grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            var titleHost = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent, Margin = new Padding(0) };
+            var titleHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card, Margin = new Padding(0) };
             var cap = Caption(captionText);
             cap.Location = new Point(0, 2);
             titleHost.Controls.Add(cap);
@@ -216,7 +281,8 @@ namespace ReFsBlockClone
             grid.Controls.Add(titleHost, 0, 0);
             grid.SetColumnSpan(titleHost, 2);
 
-            grid.Controls.Add(field, 0, 1);
+            var host = new FieldPanel(field) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0), BackColor = Theme.Card };
+            grid.Controls.Add(host, 0, 1);
             grid.Controls.Add(browse, 1, 1);
             card.Controls.Add(grid);
             return card;
@@ -260,7 +326,7 @@ namespace ReFsBlockClone
                 Location = new Point(56, 32)
             };
 
-            var header = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
+            var header = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
             header.Controls.Add(_logo);
             header.Controls.Add(title);
             header.Controls.Add(subtitle);
@@ -272,7 +338,6 @@ namespace ReFsBlockClone
             _txtSource.DragDrop += OnDragDrop;
 
             var btnBrowseSource = GhostButton("btnBrowseSource", "浏览");
-            btnBrowseSource.Margin = new Padding(0);
             btnBrowseSource.Click += (s, e) =>
             {
                 string p = UiHooks.PickOpenFile(this, "选择源文件");
@@ -280,7 +345,6 @@ namespace ReFsBlockClone
             };
 
             var btnBrowseDest = GhostButton("btnBrowseDest", "另存为");
-            btnBrowseDest.Margin = new Padding(0);
             btnBrowseDest.Click += (s, e) =>
             {
                 string p = UiHooks.PickSaveFile(this, "选择目标路径");
@@ -291,7 +355,7 @@ namespace ReFsBlockClone
             _chkPhysical.AutoSize = true;
             _chkPhysical.Font = new Font("Microsoft YaHei UI", 8.5F);
             _chkPhysical.ForeColor = Theme.Muted;
-            _chkPhysical.BackColor = Color.Transparent;
+            _chkPhysical.BackColor = Theme.Card;
             _chkPhysical.Cursor = Cursors.Hand;
             _chkPhysical.Margin = new Padding(0);
             _chkPhysical.CheckedChanged += (s, e) => KickProbe();
@@ -313,7 +377,7 @@ namespace ReFsBlockClone
             _lblVolDst.ForeColor = Theme.Muted;
             _lblVolDst.Text = "目标：待探测";
 
-            var meta = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.Transparent };
+            var meta = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Theme.Bg };
             meta.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             meta.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             meta.Controls.Add(_lblVolSrc, 0, 0);
@@ -324,6 +388,7 @@ namespace ReFsBlockClone
             _btnClone.Click += async (s, e) => await DoCloneAsync();
 
             _btnCancel = GhostButton("btnCancel", "取消");
+            _btnCancel.BackColor = Theme.Bg;
             _btnCancel.Enabled = false;
             _btnCancel.Click += (s, e) => CancelClone();
 
@@ -334,7 +399,7 @@ namespace ReFsBlockClone
             _lblPercent.ForeColor = Theme.Muted;
             _lblPercent.Text = "0%";
 
-            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, BackColor = Color.Transparent };
+            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, BackColor = Theme.Bg };
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138F));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
@@ -354,7 +419,7 @@ namespace ReFsBlockClone
             _txtLog.Margin = new Padding(0);
 
             var logCard = new Card { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 14, 12) };
-            var logGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.Transparent };
+            var logGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Theme.Card };
             logGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 20F));
             logGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             var logCap = Caption("日志");
