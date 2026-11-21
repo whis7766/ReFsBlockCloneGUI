@@ -136,16 +136,43 @@ internal static class ReFsCloneTest
         var si = new FileInfo(src); var di = new FileInfo(dst);
         Check("last-write time mirrored", si.LastWriteTimeUtc == di.LastWriteTimeUtc);
         Check("creation time mirrored", si.CreationTimeUtc == di.CreationTimeUtc);
-        const AccessControlSections sec = AccessControlSections.Owner |
-            AccessControlSections.Group | AccessControlSections.Access;
-        string sddlS = File.GetAccessControl(src).GetSecurityDescriptorSddlForm(sec);
-        string sddlD = File.GetAccessControl(dst).GetSecurityDescriptorSddlForm(sec);
-        if (sddlS != sddlD)
+        // Compare owner/group and EFFECTIVE access entries (inheritance control
+        // bits are destination-dir policy, not part of the mirrored ACL).
+        var acS = File.GetAccessControl(src); var acD = File.GetAccessControl(dst);
+        string ownS = acS.GetOwner(typeof(System.Security.Principal.SecurityIdentifier)).Value;
+        string ownD = acD.GetOwner(typeof(System.Security.Principal.SecurityIdentifier)).Value;
+        string grpS = acS.GetGroup(typeof(System.Security.Principal.SecurityIdentifier)).Value;
+        string grpD = acD.GetGroup(typeof(System.Security.Principal.SecurityIdentifier)).Value;
+        Check("owner mirrored", ownS == ownD);
+        Check("group mirrored", grpS == grpD);
+        Check("effective DACL mirrored", EffectiveAcl(acS) == EffectiveAcl(acD));
+    }
+
+    private static string EffectiveAcl(FileSecurity fs)
+    {
+        var list = new List<string>();
+        foreach (FileSystemAccessRule r in fs.GetAccessRules(true, true,
+            typeof(System.Security.Principal.SecurityIdentifier)))
+            list.Add(r.IdentityReference.Value + "|" + (int)r.FileSystemRights + "|" + r.AccessControlType);
+        list.Sort(StringComparer.Ordinal);
+        return string.Join(";", list);
+    }
+
+    private static long FirstDiff(string a, string b)
+    {
+        using (var fa = File.OpenRead(a)) using (var fb = File.OpenRead(b))
         {
-            Console.WriteLine("      SDDL src: " + sddlS);
-            Console.WriteLine("      SDDL dst: " + sddlD);
+            var ba = new byte[1 << 16]; var bb = new byte[1 << 16];
+            long off = 0;
+            while (true)
+            {
+                int na = fa.Read(ba, 0, ba.Length); int nb = fb.Read(bb, 0, bb.Length);
+                if (na != nb) return off;
+                if (na == 0) return -1;
+                for (int i = 0; i < na; i++) if (ba[i] != bb[i]) return off + i;
+                off += na;
+            }
         }
-        Check("owner/group/DACL mirrored", sddlS == sddlD);
     }
 
     private static void SetIntegrity(string path, bool enable, bool isDir)
@@ -547,7 +574,15 @@ internal static class ReFsCloneTest
             catch (Exception ex) { ok14b = false; e14b = ex.Message; }
             Check("physical sparse exit (NTFS dst)", ok14b);
             if (!ok14b) Console.WriteLine("      ERR: " + e14b);
-            if (File.Exists(p14b)) Check("physical sparse content equal", Sha(d14bs) == Sha(p14b));
+            List<long[]> qar;
+            if (RefsBlockCloner.TryQueryAllocatedRanges(d14bs, out qar))
+                Console.WriteLine("      src QAR ranges: " + string.Join(",", qar.Select(x => x[0] + "+" + x[1])));
+            if (File.Exists(p14b))
+            {
+                bool eqc = Sha(d14bs) == Sha(p14b);
+                if (!eqc) Console.WriteLine("      first diff offset: " + FirstDiff(d14bs, p14b));
+                Check("physical sparse content equal", eqc);
+            }
             if (File.Exists(p14b)) Check("physical sparse dst SPARSE", IsSparse(p14b));
             if (File.Exists(p14b)) CheckHoles("physical sparse NTFS", d14bs, p14b);
             File.Delete(p14b);

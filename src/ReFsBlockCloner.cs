@@ -659,12 +659,30 @@ namespace ReFsBlockClone
             IntPtr sd = IntPtr.Zero, owner = IntPtr.Zero, group = IntPtr.Zero, dacl = IntPtr.Zero;
             const uint SE_FILE_OBJECT = 1;
             const uint OWNER_GROUP_DACL = 1 | 2 | 4;
+            const uint PROTECTED_DACL = 0x80000000;
             uint rc = NativeMethods.GetSecurityInfo(hIn, SE_FILE_OBJECT, OWNER_GROUP_DACL,
                 out owner, out group, out dacl, IntPtr.Zero, out sd);
             if (rc == 0)
             {
-                uint rc2 = NativeMethods.SetSecurityInfo(hOut, SE_FILE_OBJECT, OWNER_GROUP_DACL,
-                    owner, group, dacl, IntPtr.Zero);
+                // Source ACEs carry INHERITED_ACE; if applied verbatim the DEST
+                // parent re-derives them (different dir => different ACL). Strip
+                // INHERITED_ACE and set a protected DACL so the source's effective
+                // entries stick on any destination.
+                if (dacl != IntPtr.Zero)
+                {
+                    int aceCount = Marshal.ReadInt16(dacl, 4);
+                    int pos = 8; // ACL header size
+                    for (int i = 0; i < aceCount; i++)
+                    {
+                        byte flags = Marshal.ReadByte(dacl, pos + 1);
+                        Marshal.WriteByte(dacl, pos + 1, (byte)(flags & ~0x10));
+                        int aceSize = Marshal.ReadInt16(dacl, pos + 2);
+                        if (aceSize <= 0) break;
+                        pos += aceSize;
+                    }
+                }
+                uint rc2 = NativeMethods.SetSecurityInfo(hOut, SE_FILE_OBJECT,
+                    OWNER_GROUP_DACL | PROTECTED_DACL, owner, group, dacl, IntPtr.Zero);
                 if (rc2 != 0)
                     _log("警告：镜像安全描述符失败（Win32 " + rc2 + "）。");
                 NativeMethods.LocalFree(sd);
