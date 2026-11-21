@@ -129,8 +129,8 @@ README 改写为准确语义。
 
 打开源 → 卷能力/序列号 → 大小/稀疏/完整性 → `CREATE_NEW` 目标 → **立即**
 delete-pending → 目标卷校验 → 镜像稀疏 → 镜像完整性（空文件时）→
-`SetEndOfFile(源大小)` → 对齐前缀分块 FSCTL（100MB，可取消、报进度）→
-尾部普通读写（稀疏空洞跳过）→ 清除 delete-pending。
+`SetEndOfFile(源大小)` → 对齐前缀分块 FSCTL（**默认 1GB**，可取消、报进度）→
+尾部普通读写（稀疏空洞跳过）→ 镜像时间戳/属性/owner/group/DACL → 清除 delete-pending。
 失败路径：句柄关闭触发删除；未armed 窗口 `DeleteFileW` 兜底。
 错误统一附 Win32 码 + 系统文本 + ReFS 中文提示（5/19/32/33/50/87/112/347）。
 路径规范化支持引号、正斜杠与 `\\?\` 长路径。
@@ -162,8 +162,86 @@ DPI PerMonitorV2 + longPathAware manifest。
 - GUI 截图为整窗渲染（含标题栏与状态栏），用于布局与状态验证；
   对话框经钩子记录，不在截图中呈现。
 
-## 6. 候选后续（未实施）
+## 6. 候选后续（状态见 §7）
 
-- `FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX` + `SOURCE_ATOMIC`（源侧原子克隆）。
-- 稀疏源按 `FSCTL_QUERY_ALLOCATED_RANGES` 只克隆已分配区间（进一步省元数据）。
-- CLI 进度输出与 `--verify` 哈希自校验开关。
+- `FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX` + `SOURCE_ATOMIC`：**评估后不采用**（§7.4）。
+- 稀疏源按 `FSCTL_QUERY_ALLOCATED_RANGES` 只克隆已分配区间：**实测后否决**（§7.2，QAR 首簇报告不可靠）。
+- CLI 进度输出与 `--verify` 哈希自校验开关：未实施。
+
+## 7. 第二轮审计：稀疏 / 速度 / 写入量 / 使用适配（CI run 15，commit 5a9d32f，全绿）
+
+引擎 **69 PASS / 0 FAIL**、GUI **27 PASS / 0 FAIL**（9 态截图，含物理模式）。
+
+### 7.1 稀疏文件兼容性（问题①）
+
+- 块克隆路径：源稀疏 ⇒ 目标 `FSCTL_SET_SPARSE` 镜像；对齐前缀经 refcount 共享，
+  空洞随映射天然保留；尾部不足一簇若为空洞则不写。4K 与 64K 簇卷空洞图均一致。
+- 物理路径：线性全量扫描 + **4K 粒度零 run 打洞**（`FSCTL_SET_ZERO_DATA`），
+  非零 run 才写盘。内容字节级一致；空洞图与"源字节扫描 ground truth"一致。
+- **实测新事实**：现代 ReFS（Server 2025）**支持** `FSCTL_QUERY_ALLOCATED_RANGES`
+  （Win32 旧支持矩阵列 ReFS=No 已过时），也支持 `FSCTL_SET_ZERO_DATA`。
+  但 ReFS 的 QAR 对稀疏文件**首簇报告有偏差**（把已分配的首簇报成空洞），
+  故**不能**用 QAR 驱动复制（会漏数据）；本工具仅用它做空洞图观测，
+  复制一律线性扫描保证内容正确。跨文件系统空洞校验以字节扫描为 ground truth。
+
+### 7.2 速度（问题③）与基准
+
+CI 基准（2GB 随机源，R: 4K ReFS VHDX，宿主写入以动态 VHDX 新增长度代理）：
+
+| 分块 | 耗时 | VHDX 新增块 |
+|---|---|---|
+| 100MB | 17ms | 0 |
+| 1024MB | 16ms | 0 |
+| 3072MB | 16ms | 0 |
+| 1024MB（源 integrity-on，1GB） | 20ms | 0 |
+
+- 块克隆只改 refcount/元数据、不搬数据字节，故 2GB 克隆 ~16ms、宿主**无新增数据块**。
+- 温缓存 VHDX 下分块大小对耗时影响可忽略；**默认 1GB** 的价值在于减少 FSCTL 调用次数
+  （2GB 仅 2 次 vs 100MB 的 20 次），降低冷缓存/真实盘上的逐次校验与日志提交开销，
+  且远小于 4GB 单次上限。分块须为簇整数倍、<4GB，引擎显式校验。
+- 度量口径说明：VHDX 增长是**块粒度**（测新增块分配，非总字节）；要精确总写入需
+  ETW/SMART。数据字节零搬运是块克隆的结构性优势，与分块无关。
+- 取消修正：1GB 分块下小文件只跑一次循环，进度回调触发的取消落在循环后；
+  已在循环后/尾部前补 `ThrowIfCancellationRequested`，保证取消必清理半成品。
+
+### 7.3 磁盘写入量（问题④）
+
+已落地的降写入手段：
+1. 块克隆：数据字节 0 写入（仅元数据/refcount）。
+2. 稀疏镜像 + 物理模式 4K 零 run 打洞：只写非零单元，空洞不占物理空间。
+3. 完整性镜像：目标继承源 integrity 设置；integrity-on 源克隆**不重算校验和**
+   （校验和随共享簇走，基准 VHDX 新增 0）。
+4. 尾部仅复制不足一簇的零头；元数据（时间戳/属性/ACL）仅描述符写入。
+物理模式写入量 = 源非零字节数（+元数据），块模式 ≈ 元数据；二者都远低于整文件重写。
+
+### 7.4 EX + SOURCE_ATOMIC 不采用理由
+
+`FSCTL_DUPLICATE_EXTENTS_TO_FILE_EX`（0x00098348）+ `SOURCE_ATOMIC`(0x1) 提供
+"单次复制从源视角原子"。不采用：① 其保证与既有 delete-pending 清理 + 失败回滚重叠；
+② 源侧序列化带来额外开销；③ [MS-FSCC] 2.3.9.1 wire 布局为 StructureSize 在前共 44B，
+与本地 winioctl 结构 padding 存在差异、未获实测确认，引入不确定风险。收益/风险不划算。
+
+### 7.5 克隆后使用性能适配矩阵（问题⑤）
+
+| 使用场景 | 推荐模式 | 理由 |
+|---|---|---|
+| 只读/少改、同基多克隆（VM 模板、备份副本） | 块克隆 | 瞬时、共享簇、写入极低；读共享 LCN 无额外开销 |
+| 克隆后大量修改 | 物理复制 | 块克隆修改触发 allocate-on-write 放大 + refcount 递减；物理无共享、无 AoW、无 8175 上限 |
+| 跨卷 / 非 ReFS 目标 | 物理复制 | 块克隆仅限同 ReFS 卷 |
+| 大稀疏文件 | 两者皆可 | 块克隆空洞随 refcount 共享；物理按 4K 打洞保真 |
+| 需 integrity streams | 块克隆 | 校验和随共享簇复用，不重算；物理写入需重算校验和（额外 CPU/写入） |
+| 同区域 >8175 份克隆 | 物理复制 | 块克隆第 8176 次返回 347；物理不受引用上限约束 |
+
+GUI 已加"物理复制"复选框：跨卷/非 ReFS 时不再误报拒绝，探测面板显示中性提示；
+日志标注模式。元数据保真：时间戳/属性经 `FileBasicInfo` 镜像；owner/group/DACL 经
+`GetSecurityInfo`/`SetSecurityInfo`，**清除 INHERITED_ACE 并以 PROTECTED_DACL 落地**
+（否则目标父目录会重推导继承 ACE 导致 ACL 漂移）；测试按"每 trustee 权利并集"比较
+有效 ACL（Windows 会合并/拆分同 trustee ACE）。均为 best-effort，失败仅警告不致命。
+
+### 7.6 本轮修掉的实现缺陷
+
+- 目标句柄缺 `WRITE_DAC|WRITE_OWNER` → 镜像 ACL 返回 Win32 5；已补。
+- 继承 ACE 直落导致跨目录 ACL 漂移 → 清 INHERITED + PROTECTED_DACL。
+- 块粒度零检测漏子块零尾 → 4K 零 run 打洞。
+- 范围驱动（QAR）复制漏首簇数据 → 否决，改线性扫描。
+- 1GB 分块下取消检查缺失 → 循环后补检查。

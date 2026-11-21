@@ -51,9 +51,15 @@ reference/
 2. 读取源大小、稀疏属性、完整性信息（含簇大小）；
 3. `CREATE_NEW` 创建目标（绝不覆盖），**立即**设置删除待决标记作为失败清理手段；
 4. 校验目标卷能力与卷序列号同源；镜像源的稀疏属性与完整性设置；
-5. `SetEndOfFile` 到源精确大小；对**簇对齐前缀**按 100MB 分块执行块克隆；
+5. `SetEndOfFile` 到源精确大小；对**簇对齐前缀**按 **1GB** 分块执行块克隆（分块须为簇整数倍且 <4GB）；
 6. 尾部不足一簇的部分用普通读写复制（稀疏源的空洞尾部保持空洞）；
-7. 成功后清除删除待决标记；任何失败路径关闭句柄即自动删除半成品。
+7. 镜像源的时间戳/属性与 owner/group/DACL（best-effort，失败仅警告）；
+8. 成功后清除删除待决标记；任何失败路径关闭句柄即自动删除半成品。
+
+**物理复制模式**（GUI 复选框 / CLI `--physical`）：不共享块、顺序读写，跨卷与非 ReFS 目标可用；
+稀疏源镜像稀疏属性并按 4K 粒度对全零 run 打洞（`FSCTL_SET_ZERO_DATA`），只写非零单元。
+适合"克隆后大量修改"（避免 allocate-on-write 放大与 8175 引用上限）或块克隆不可用的场景；
+只读/少改的同基多克隆仍推荐块克隆（瞬时、写入极低）。详见 docs/DESIGN.md §7 适配矩阵。
 
 关于"删除待决"（delete-pending）的准确语义：它是**进程级**清理辅助——句柄关闭时文件系统删除文件，可覆盖异常、取消、进程被杀等路径；它**不是**块克隆的前提条件，也**不保证**操作系统崩溃/断电后的清理（该标记不跨崩溃持久化）。单次 FSCTL 本身是原子的，但多分块序列整体不是事务，故应用层清理仍然必要。创建与标记之间的极小窗口另有 `DeleteFileW` 兜底。
 
@@ -71,29 +77,32 @@ msbuild ReFsBlockCloneGUI.sln /p:Configuration=Release /p:Platform=x64 /p:Prefer
 
 1. MSBuild 编译 Release x64；
 2. 在动态 VHDX 上制备两个真实 ReFS 卷（R: 4KB 簇、S: 64KB 簇）；
-3. 引擎矩阵：非对齐稠密/稀疏、稀疏尾洞、零字节、亚簇小文件、跨卷（ReFS→NTFS、ReFS→ReFS）拒绝、完整性开启/目录继承、取消清理、8175 引用上限、8.2GB 全尺度（磁盘空间足够时）；
-4. 无头 CLI 成功/失败路径与哈希校验；
-5. GUI 冒烟测试：真实克隆的初始/填充/进度/成功/取消/错误/最小尺寸状态截图（PNG 产物）；
-6. 上传日志、截图与二进制产物。
+3. 引擎矩阵：非对齐稠密/稀疏、稀疏尾洞、零字节、亚簇小文件、跨卷（ReFS→NTFS、ReFS→ReFS）拒绝、完整性开启/目录继承、取消清理、8175 引用上限、8.2GB 全尺度（磁盘空间足够时）、元数据/ACL 保真、物理复制（跨卷+稀疏打洞）；
+4. 分块/写入量基准：100/1024/3072MB 分块克隆 2GB 源，以动态 VHDX 新增长度代理宿主写入；另测 integrity-on 源；
+5. 无头 CLI 成功/失败路径与哈希校验；
+6. GUI 冒烟测试：真实克隆的初始/填充/进度/成功/取消/错误/目标已存在/最小尺寸/物理模式状态截图（PNG 产物）；
+7. 上传日志、截图、基准与二进制产物。
 
 发布：手动触发 `Build and Release` 并填写 tag（发布前跑 quick 引擎验证）。
 
 ## 使用
 
-**GUI**：双击 `ReFsBlockCloneGUI.exe`，选择源文件（支持拖放），目标路径自动建议（可改），点击"开始克隆"；可中途取消；卷信息面板实时显示文件系统、簇大小、完整性与同卷校验。
+**GUI**：双击 `ReFsBlockCloneGUI.exe`，选择源文件（支持拖放），目标路径自动建议（可改），点击"开始克隆"；可中途取消；卷信息面板实时显示文件系统、簇大小、完整性与同卷校验；勾选"物理复制"可跨卷/非 ReFS 复制并保真稀疏空洞。
 
 **CLI**：
 
 ```bat
-ReFsBlockCloneGUI.exe <源文件> <目标文件>
+ReFsBlockCloneGUI.exe <源文件> <目标文件> [--physical]
 ```
 
-无界面；在当前目录追加写 `refsclone_headless.log`（UTF-8 带 BOM）；退出码 `0`=成功，`1`=失败。
+无界面；在当前目录追加写 `refsclone_headless.log`（UTF-8 带 BOM）；退出码 `0`=成功，`1`=失败。`--physical` 走物理复制模式。
 
 ## 注意事项
 
 - 仅 64 位 Windows（ReFS 块克隆仅存在于 x64 Windows）；
-- 源与目标必须同一 ReFS 卷（可不同目录）；目标已存在会报错，不覆盖；
+- 块克隆要求源与目标同一 ReFS 卷（可不同目录）；目标已存在会报错，不覆盖；跨卷/非 ReFS 请用物理复制模式；
+- 稀疏源在两种模式下都保真空洞；元数据（时间戳/属性/ACL）best-effort 镜像；
+- 块克隆同区域引用上限 8175（第 8176 次返回 347）；大量同基克隆或克隆后重修改请选物理复制；
 - 错误信息附 Win32 错误码与针对 ReFS 的中文提示（如 347 引用上限、50 约束不满足等）。
 
 ## 文献
@@ -105,3 +114,7 @@ ReFsBlockCloneGUI.exe <源文件> <目标文件>
 - [[MS-FSCC] 2.3.7 / 2.3.9](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/78e67b4b-84a4-4730-a34f-dcdcb2224e49)
 - [ReFS integrity streams](https://learn.microsoft.com/en-us/windows-server/storage/refs/integrity-streams)
 - [FILE_DISPOSITION_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_disposition_info)
+- [FSCTL_QUERY_ALLOCATED_RANGES](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_query_allocated_ranges)
+- [FSCTL_SET_ZERO_DATA](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_set_zero_data)
+- [FILE_BASIC_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_basic_info)
+- [GetSecurityInfo / SetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getsecurityinfo)
