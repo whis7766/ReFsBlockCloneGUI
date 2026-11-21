@@ -179,8 +179,8 @@ namespace ReFsBlockClone
             root.Controls.Add(pnlActions, 0, 3);
             root.Controls.Add(grpLog, 0, 4);
 
-            // Plain panel+label status bar: ToolStrip/StatusStrip items do not
-            // render under DrawToBitmap (WM_PRINT), which the CI screenshots use.
+            // Plain panel+label status bar: predictable under DrawToBitmap
+            // (the CI screenshot bitmap must be window-sized, see GuiSmokeTest).
             var statusPanel = new Panel
             {
                 Dock = DockStyle.Bottom,

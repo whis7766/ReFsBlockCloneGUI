@@ -99,7 +99,9 @@ README 改写为准确语义。
 83 次 100MB FSCTL）：**8.231GB+12345 用时 4.936s**，内容抽样一致。性能与硬件/
 虚拟化层强相关，README 不再写死数字，指向 CI 日志。
 
-## 3. 实测事实摘录（CI run 1，commit ddd0a14）
+## 3. 实测事实摘录
+
+**CI run 1（commit ddd0a14）**
 
 - 引擎矩阵 40 PASS / 1 FAIL；唯一 FAIL 为测试断言写反（继承完整性方向），
   引擎行为正确；run 2 修正断言并补反向用例。
@@ -108,6 +110,18 @@ README 改写为准确语义。
 - 跨卷拒绝：ReFS→NTFS 与 ReFS→ReFS 均干净失败、无孤儿文件。
 - 取消：`OperationCanceledException` + 半成品自动删除。
 - 64KB 簇卷：稠密/稀疏非对齐均字节级一致。
+- 8.231GB+12345 全尺度克隆 **4.936s**（VHDX 虚拟磁盘），内容抽样一致。
+
+**CI run 4（commit 129f937，全绿）**
+
+- 引擎矩阵 **45 PASS / 0 FAIL**（含三方向完整性、尾有数据稀疏、引用上限 2.4s）。
+- headless CLI：4MB+123 成功 **0.096s**、哈希一致；跨卷退出码 1、无孤儿。
+- GUI 冒烟 **23 PASS / 0 FAIL**，8 张状态截图（初始/填充/进度/成功/取消/
+  错误/目标已存在/最小尺寸）。
+- 迭代中修掉的两个 CI/测试坑：PowerShell `&` 不等待 GUI 子系统进程
+  （`$LASTEXITCODE` 为空）→ 改 `Start-Process -Wait -PassThru`；
+  `Form.DrawToBitmap` 输出含非客户区标题栏，bitmap 必须按**窗口尺寸**创建，
+  否则底部状态栏被裁掉（run 3 截图"状态栏空白"的真因）。
 
 ## 4. 设计决策
 
@@ -125,7 +139,8 @@ delete-pending → 目标卷校验 → 镜像稀疏 → 镜像完整性（空文
 
 分组式布局：源/目标（浏览+拖放+目标自动建议）、卷信息面板（文件系统、簇大小、
 完整性、稀疏、同卷校验，300ms 防抖异步探测）、操作行（开始/取消/进度条/百分比）、
-等宽日志、状态栏。DPI PerMonitorV2 + longPathAware manifest。
+等宽日志、Panel+Label 状态栏（可被 DrawToBitmap 完整渲染）。
+DPI PerMonitorV2 + longPathAware manifest。
 **可测试性**：`UiHooks.ShowMessage` 对话框钩子；`MainForm.ProgressOverride`
 （worker 线程同步回调，可确定性暂停克隆以截取进度态）；`InternalsVisibleTo`。
 
@@ -144,7 +159,8 @@ delete-pending → 目标卷校验 → 镜像稀疏 → 镜像完整性（空文
 - 块克隆不是快照：克隆期间源被并发写入不保证一致。
 - delete-pending 不跨 OS 崩溃持久化；崩溃后可能留半成品（NTFS/ReFS 皆然）。
 - 同卷判定用卷序列号代理（理论上可碰撞）；FSCTL 自身亦会拒绝跨卷。
-- GUI 截图为客户区渲染（不含标题栏），用于布局与状态验证。
+- GUI 截图为整窗渲染（含标题栏与状态栏），用于布局与状态验证；
+  对话框经钩子记录，不在截图中呈现。
 
 ## 6. 候选后续（未实施）
 

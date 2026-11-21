@@ -36,9 +36,12 @@ internal static class GuiSmokeTest
     private static void Snap(string name)
     {
         Application.DoEvents();
-        using (var bmp = new Bitmap(_form.ClientSize.Width, _form.ClientSize.Height))
+        // Form.DrawToBitmap prints the WHOLE window (non-client title bar
+        // included), so the bitmap must be window-sized, not client-sized,
+        // or the bottom (status bar) gets cropped out.
+        using (var bmp = new Bitmap(_form.Width, _form.Height))
         {
-            _form.DrawToBitmap(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height));
+            _form.DrawToBitmap(bmp, new Rectangle(0, 0, _form.Width, _form.Height));
             bmp.Save(Path.Combine(_outDir, name + ".png"), ImageFormat.Png);
         }
         Console.WriteLine("  [SNAP] " + name + ".png");
