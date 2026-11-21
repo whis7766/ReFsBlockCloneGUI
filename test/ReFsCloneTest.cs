@@ -117,7 +117,21 @@ internal static class ReFsCloneTest
         if (eq == null)
             Info(label + ": QUERY_ALLOCATED_RANGES unsupported here; hole-map check skipped");
         else
+        {
+            if (eq != true)
+            {
+                Console.WriteLine("      map a: " + DumpRanges(a));
+                Console.WriteLine("      map b: " + DumpRanges(b));
+            }
             Check(label + " hole map identical", eq == true);
+        }
+    }
+
+    private static string DumpRanges(string p)
+    {
+        List<long[]> r;
+        if (!RefsBlockCloner.TryQueryAllocatedRanges(p, out r)) return "<unsupported>";
+        return string.Join(",", r.Select(x => x[0] + "+" + x[1]));
     }
 
     // Best-effort variant: report mismatch as INFO (used where the destination
@@ -158,12 +172,21 @@ internal static class ReFsCloneTest
 
     private static string EffectiveAcl(FileSecurity fs)
     {
-        var list = new List<string>();
+        // Aggregate granted/denied rights per trustee: Windows may merge or split
+        // same-trustee ACEs, so compare the UNION of rights, not ACE granularity.
+        var map = new Dictionary<string, int>();
         foreach (FileSystemAccessRule r in fs.GetAccessRules(true, true,
             typeof(System.Security.Principal.SecurityIdentifier)))
-            list.Add(r.IdentityReference.Value + "|" + (int)r.FileSystemRights + "|" + r.AccessControlType);
-        list.Sort(StringComparer.Ordinal);
-        return string.Join(";", list);
+        {
+            string key = r.IdentityReference.Value + "|" + r.AccessControlType;
+            int cur; map.TryGetValue(key, out cur);
+            map[key] = cur | (int)r.FileSystemRights;
+        }
+        var keys = new List<string>(map.Keys);
+        keys.Sort(StringComparer.Ordinal);
+        var sb = new System.Text.StringBuilder();
+        foreach (var k in keys) sb.Append(k).Append('=').Append(map[k]).Append(';');
+        return sb.ToString();
     }
 
     private static long FirstDiff(string a, string b)
