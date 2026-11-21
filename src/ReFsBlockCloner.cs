@@ -407,16 +407,17 @@ namespace ReFsBlockClone
                     uint want = (uint)Math.Min(BLK, (long)srcSize - done);
                     if (!NativeMethods.ReadFile(hIn, data, want, out n, IntPtr.Zero) || n == 0)
                         throw WinErr(Marshal.GetLastWin32Error(), "读取源文件失败");
+                    int nn = (int)n;
                     // Split the block into 4K-granular zero / non-zero runs so
                     // sub-block zero tails are punched too (hole-map fidelity).
                     // Every byte is processed linearly => content always exact.
                     int i = 0;
-                    while (i < n)
+                    while (i < nn)
                     {
-                        bool z = ZeroAt(data, i, n);
+                        bool z = ZeroAt(data, i, nn);
                         int j = i;
-                        while (j < n && ZeroAt(data, j, n) == z) j += 4096;
-                        if (j > n) j = n;
+                        while (j < nn && ZeroAt(data, j, nn) == z) j += 4096;
+                        if (j > nn) j = nn;
                         int runLen = j - i;
                         bool punched = false;
                         if (z && srcSparse && zeroOk)
