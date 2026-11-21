@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Threading;
 using ReFsBlockClone;
@@ -95,6 +96,40 @@ internal static class ReFsCloneTest
         return (GetFileAttributesW(p) & FILE_ATTRIBUTE_SPARSE_FILE) != 0;
     }
 
+    // null = FSCTL_QUERY_ALLOCATED_RANGES unsupported on this file system.
+    private static bool? HoleMapEqual(string a, string b)
+    {
+        System.Collections.Generic.List<long[]> ra, rb;
+        bool sa = RefsBlockCloner.TryQueryAllocatedRanges(a, out ra);
+        bool sb = RefsBlockCloner.TryQueryAllocatedRanges(b, out rb);
+        if (!sa || !sb) return null;
+        if (ra.Count != rb.Count) return false;
+        for (int i = 0; i < ra.Count; i++)
+            if (ra[i][0] != rb[i][0] || ra[i][1] != rb[i][1]) return false;
+        return true;
+    }
+
+    private static void CheckHoles(string label, string a, string b)
+    {
+        bool? eq = HoleMapEqual(a, b);
+        if (eq == null)
+            Info(label + ": QUERY_ALLOCATED_RANGES unsupported here; hole-map check skipped");
+        else
+            Check(label + " hole map identical", eq == true);
+    }
+
+    private static void CheckMetadata(string src, string dst)
+    {
+        var si = new FileInfo(src); var di = new FileInfo(dst);
+        Check("last-write time mirrored", si.LastWriteTimeUtc == di.LastWriteTimeUtc);
+        Check("creation time mirrored", si.CreationTimeUtc == di.CreationTimeUtc);
+        const AccessControlSections sec = AccessControlSections.Owner |
+            AccessControlSections.Group | AccessControlSections.Access;
+        string sddlS = File.GetAccessControl(src).GetSecurityDescriptorSddlForm(sec);
+        string sddlD = File.GetAccessControl(dst).GetSecurityDescriptorSddlForm(sec);
+        Check("owner/group/DACL mirrored", sddlS == sddlD);
+    }
+
     private static void SetIntegrity(string path, bool enable, bool isDir)
     {
         var h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0x1 | 0x2 | 0x4, IntPtr.Zero,
@@ -158,6 +193,28 @@ internal static class ReFsCloneTest
     {
         try
         {
+            // Benchmark mode: one clone with an explicit chunk size; CI measures
+            // host-side write volume via dynamic-VHDX growth around this call.
+            if (args.Length > 0 && args[0] == "bench")
+            {
+                string bsrc = args[1], bdst = args[2];
+                ulong mb = ulong.Parse(args[3]);
+                var swb = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    new RefsBlockCloner(s => { }).Clone(bsrc, bdst, null,
+                        default(CancellationToken), mb * 1024 * 1024);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("BENCH FAIL chunkMB=" + mb + " " + ex.Message);
+                    return 1;
+                }
+                swb.Stop();
+                Console.WriteLine("BENCH chunkMB=" + mb + " ms=" + swb.ElapsedMilliseconds);
+                return 0;
+            }
+
             string drive = (args.Length > 0 ? args[0] : "R").TrimEnd('\\', ':') + ":\\";
             string drive2 = args.Length > 1 && args[1] != "quick" && args[1] != "full"
                 ? args[1].TrimEnd('\\', ':') + ":\\" : null;
@@ -181,6 +238,7 @@ internal static class ReFsCloneTest
             LenOk(d1d, new FileInfo(d1s).Length, "dst");
             if (File.Exists(d1d)) Check("content equal (SHA256)", Sha(d1s) == Sha(d1d));
             if (File.Exists(d1d)) Check("dense source => dst NOT sparse", !IsSparse(d1d));
+            if (File.Exists(d1d)) CheckMetadata(d1s, d1d);
             File.Delete(d1s); File.Delete(d1d);
 
             // [2] dense 8.231GB non-aligned (full scale)
@@ -216,6 +274,7 @@ internal static class ReFsCloneTest
             LenOk(d3d, new FileInfo(d3s).Length, "dst");
             if (File.Exists(d3d)) Check("dst still SPARSE", IsSparse(d3d));
             if (File.Exists(d3d)) Check("content equal (SHA256)", Sha(d3s) == Sha(d3d));
+            if (File.Exists(d3d)) CheckHoles("sparse tail-data", d3s, d3d);
             File.Delete(d3s); File.Delete(d3d);
 
             // [4] zero-byte
@@ -255,6 +314,7 @@ internal static class ReFsCloneTest
             LenOk(d6d, new FileInfo(d6s).Length, "dst");
             if (File.Exists(d6d)) Check("dst still SPARSE", IsSparse(d6d));
             if (File.Exists(d6d)) Check("content equal (SHA256)", Sha(d6s) == Sha(d6d));
+            if (File.Exists(d6d)) CheckHoles("sparse tail-hole", d6s, d6d);
             File.Delete(d6s); File.Delete(d6d);
 
             // [7] sub-cluster dense file (1000 bytes): pure tail copy path
@@ -294,6 +354,7 @@ internal static class ReFsCloneTest
                 Check("64K sparse clone exit", ok8b);
                 if (File.Exists(d8bd)) Check("64K sparse content equal", Sha(d8bs) == Sha(d8bd));
                 if (File.Exists(d8bd)) Check("64K sparse dst SPARSE", IsSparse(d8bd));
+                if (File.Exists(d8bd)) CheckHoles("64K sparse", d8bs, d8bd);
                 File.Delete(d8bs); File.Delete(d8bd);
 
                 // [9] cross-ReFS-volume must be REJECTED, no orphan
@@ -430,6 +491,36 @@ internal static class ReFsCloneTest
                 for (int i = 0; i < successes; i++) File.Delete(Path.Combine(dir, "cap_" + i + ".dst"));
                 File.Delete(d13s);
             }
+
+            // [14] physical copy strategy: cross-volume + sparse hole punching
+            Console.WriteLine("\n[14] physical copy strategy");
+            var d14s = Path.Combine(dir, "d14.src");
+            File.Delete(d14s);
+            CreateDense(d14s, (1 << 20) + 999, 43);
+            string p14d = Path.Combine(Path.GetTempPath(), "reftest_phys_" + Guid.NewGuid().ToString("N") + ".dst");
+            File.Delete(p14d);
+            bool ok14 = true; string e14 = "";
+            try { new RefsBlockCloner(s => Console.WriteLine("      | " + s)).ClonePhysical(d14s, p14d); }
+            catch (Exception ex) { ok14 = false; e14 = ex.Message; }
+            Check("physical cross-volume exit", ok14);
+            if (!ok14) Console.WriteLine("      ERR: " + e14);
+            Check("physical dst exists", File.Exists(p14d));
+            if (File.Exists(p14d)) Check("physical content equal", Sha(d14s) == Sha(p14d));
+            if (File.Exists(p14d)) CheckMetadata(d14s, p14d);
+            File.Delete(p14d);
+
+            var d14bs = Path.Combine(dir, "d14b.src"); var d14bd = Path.Combine(dir, "d14b.dst");
+            File.Delete(d14bs); File.Delete(d14bd);
+            DoCreateSparse(d14bs, m100 + 12345, new long[][] { new long[] { 0, 1 << 20 }, new long[] { 50 * 1024 * 1024, 64 * 1024 } });
+            bool ok14b = true; string e14b = "";
+            try { new RefsBlockCloner(s => { }).ClonePhysical(d14bs, d14bd); }
+            catch (Exception ex) { ok14b = false; e14b = ex.Message; }
+            Check("physical sparse exit", ok14b);
+            if (!ok14b) Console.WriteLine("      ERR: " + e14b);
+            if (File.Exists(d14bd)) Check("physical sparse content equal", Sha(d14bs) == Sha(d14bd));
+            if (File.Exists(d14bd)) Check("physical sparse dst SPARSE", IsSparse(d14bd));
+            if (File.Exists(d14bd)) CheckHoles("physical sparse", d14bs, d14bd);
+            File.Delete(d14s); File.Delete(d14bs); File.Delete(d14bd);
 
             Console.WriteLine("\n==== RESULT: PASS=" + _pass + " FAIL=" + _fail + " ====");
             return _fail == 0 ? 0 : 1;

@@ -201,6 +201,22 @@ internal static class GuiSmokeTest
             Check("exists dialog recorded", Dialogs.Exists(d => d.Contains("已存在")));
             Snap("07-exists");
 
+            // ---- physical mode: cross-volume copy must succeed without warning ----
+            Find<CheckBox>("chkPhysical").Checked = true;
+            Find<TextBox>("txtSource").Text = smallSrc;
+            string physDst = ntfs + ":\\guismoke_phys_" + Guid.NewGuid().ToString("N") + ".dst";
+            Find<TextBox>("txtDest").Text = physDst;
+            Dialogs.Clear();
+            var t5 = _form.DoCloneAsync();
+            PumpUntil(() => t5.IsCompleted, 60000);
+            Check("physical cross-volume success", File.Exists(physDst));
+            Check("physical SHA256 equal", File.Exists(physDst) && Sha(smallSrc) == Sha(physDst));
+            Check("no cross-volume warning in physical mode", Dialogs.Count == 0);
+            Check("log shows physical mode", _form.LogText.Contains("物理复制"));
+            Snap("09-physical");
+            File.Delete(physDst);
+            Find<CheckBox>("chkPhysical").Checked = false;
+
             // ---- minimum-size layout ----
             _form.Size = _form.MinimumSize;
             Application.DoEvents();

@@ -36,6 +36,7 @@ namespace ReFsBlockClone
         private readonly Label _lblVolSrc = new Label { Name = "lblVolSrc" };
         private readonly Label _lblVolDst = new Label { Name = "lblVolDst" };
         private readonly TextBox _txtLog = new TextBox { Name = "txtLog" };
+        private readonly CheckBox _chkPhysical = new CheckBox { Name = "chkPhysical" };
         private readonly Label _status = new Label { Name = "statusLabel" };
 
         private readonly System.Windows.Forms.Timer _probeTimer = new System.Windows.Forms.Timer { Interval = 300 };
@@ -126,6 +127,12 @@ namespace ReFsBlockClone
             tblVol.Controls.Add(_lblVolDst, 0, 1);
             grpVol.Controls.Add(tblVol);
 
+            // ---- strategy choice ----
+            _chkPhysical.Text = "物理复制模式（不共享物理块；跨卷可用；适合克隆后大量修改）";
+            _chkPhysical.AutoSize = true;
+            _chkPhysical.Margin = new Padding(4, 6, 0, 0);
+            _chkPhysical.CheckedChanged += (s, e) => KickProbe();
+
             // ---- actions row ----
             var pnlActions = new TableLayoutPanel { Height = 44, Dock = DockStyle.Fill, ColumnCount = 4 };
             pnlActions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130F));
@@ -166,18 +173,20 @@ namespace ReFsBlockClone
             grpLog.Controls.Add(_txtLog);
 
             // ---- root layout ----
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(10) };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(10) };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 82F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.Controls.Add(grpSource, 0, 0);
             root.Controls.Add(grpDest, 0, 1);
             root.Controls.Add(grpVol, 0, 2);
-            root.Controls.Add(pnlActions, 0, 3);
-            root.Controls.Add(grpLog, 0, 4);
+            root.Controls.Add(_chkPhysical, 0, 3);
+            root.Controls.Add(pnlActions, 0, 4);
+            root.Controls.Add(grpLog, 0, 5);
 
             // Plain panel+label status bar: predictable under DrawToBitmap
             // (the CI screenshot bitmap must be window-sized, see GuiSmokeTest).
@@ -281,8 +290,14 @@ namespace ReFsBlockClone
             }
             else if (_srcInfo != null && _dstInfo.Serial == _srcInfo.Serial && _dstInfo.SupportsBlockClone)
             {
-                _lblVolDst.Text = string.Format("目标卷：与源同卷 ✓（{0}，可块克隆）", _dstInfo.FileSystem);
+                _lblVolDst.Text = string.Format("目标卷：与源同卷 ✓（{0}{1}）",
+                    _dstInfo.FileSystem, _chkPhysical.Checked ? "；物理复制模式" : "，可块克隆");
                 _lblVolDst.ForeColor = Color.FromArgb(30, 110, 50);
+            }
+            else if (_chkPhysical.Checked)
+            {
+                _lblVolDst.Text = string.Format("目标卷：{0}（物理复制模式：跨卷/非 ReFS 可用）", _dstInfo.FileSystem);
+                _lblVolDst.ForeColor = SystemColors.ControlText;
             }
             else
             {
@@ -365,6 +380,8 @@ namespace ReFsBlockClone
             }
 
             // Same-volume check: prefer probed serials; fall back to drive roots.
+            // Physical mode legitimately crosses volumes, so no warning there.
+            bool physical = _chkPhysical.Checked;
             bool crossVolume;
             if (_srcInfo != null && _dstInfo != null)
                 crossVolume = _srcInfo.Serial != _dstInfo.Serial;
@@ -374,7 +391,7 @@ namespace ReFsBlockClone
                 crossVolume = !string.IsNullOrEmpty(sr) && !string.IsNullOrEmpty(dr) &&
                     !string.Equals(sr, dr, StringComparison.OrdinalIgnoreCase);
             }
-            if (crossVolume)
+            if (crossVolume && !physical)
             {
                 if (UiHooks.ShowMessage(this,
                     "源文件与目标文件不在同一卷。\n块克隆要求源与目标位于同一 ReFS 卷，继续将被拒绝。仍要继续吗？",
@@ -391,6 +408,7 @@ namespace ReFsBlockClone
             _txtLog.Clear();
             AppendLog("源文件：   " + src);
             AppendLog("目标文件： " + dst);
+            AppendLog("模式：     " + (physical ? "物理复制（不共享块）" : "块克隆（共享物理簇）"));
             AppendLog("----------------------------------------");
 
             _cts = new CancellationTokenSource();
@@ -408,7 +426,8 @@ namespace ReFsBlockClone
                 await Task.Run(() =>
                 {
                     var cloner = new RefsBlockCloner(AppendLog);
-                    cloner.Clone(src, dst, progress, _cts.Token);
+                    if (physical) cloner.ClonePhysical(src, dst, progress, _cts.Token);
+                    else cloner.Clone(src, dst, progress, _cts.Token);
                 });
                 sw.Stop();
                 AppendLog("----------------------------------------");
