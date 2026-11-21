@@ -151,7 +151,7 @@ namespace ReFsBlockClone
             using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), Radius))
             using (var brush = new SolidBrush(fill))
                 e.Graphics.FillPath(brush, path);
-            if (BorderColor != Color.Transparent)
+            if (BorderColor != Color.Transparent && Enabled)
                 using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), Radius))
                 using (var pen = new Pen(BorderColor))
                     e.Graphics.DrawPath(pen, path);
@@ -235,8 +235,9 @@ namespace ReFsBlockClone
                 Dock = DockStyle.Fill,
                 BackColor = Theme.Card,
                 Font = new Font("Microsoft YaHei UI", 9F),
-                FillColor = Color.FromArgb(243, 244, 246),
-                HoverColor = Color.FromArgb(233, 235, 239),
+                FillColor = Color.White,
+                HoverColor = Color.FromArgb(249, 250, 251),
+                BorderColor = Color.FromArgb(224, 227, 232),
                 ForeColor = Color.FromArgb(55, 65, 81),
                 Margin = new Padding(0, 7, 0, 7)
             };
@@ -651,7 +652,7 @@ namespace ReFsBlockClone
 
             _busy = true;
             UpdateCloneEnabled();
-            _btnClone.Text = "正在克隆…";
+            _btnClone.Text = "克隆中…";
             _btnCancel.Enabled = true;
             _lblPercent.Text = "0%";
             _lblPercent.ForeColor = Theme.Accent;
@@ -690,7 +691,7 @@ namespace ReFsBlockClone
                 sw.Stop();
                 AppendLog("----------------------------------------");
                 AppendLog("已取消，半成品目标已自动清理。");
-                _lblPercent.Text = "—";
+                _lblPercent.Text = "";
                 _lblPercent.ForeColor = Theme.Muted;
                 _status.Text = "已取消，半成品目标已自动清理。";
                 _status.ForeColor = Theme.Muted;
@@ -700,7 +701,7 @@ namespace ReFsBlockClone
                 sw.Stop();
                 AppendLog("----------------------------------------");
                 AppendLog("克隆失败：" + ex.Message);
-                _lblPercent.Text = "—";
+                _lblPercent.Text = "";
                 _lblPercent.ForeColor = Theme.Muted;
                 _status.Text = "克隆失败。";
                 _status.ForeColor = Theme.Bad;
