@@ -208,7 +208,7 @@ internal static class ReFsCloneTest
             Console.WriteLine("\n[3] sparse 100MB+12345, tail partial has data");
             var d3s = Path.Combine(dir, "d3.src"); var d3d = Path.Combine(dir, "d3.dst");
             File.Delete(d3s); File.Delete(d3d);
-            DoCreateSparse(d3s, m100 + 12345, new long[][] { new long[] { 0, 1 << 20 }, new long[] { m100 - 4096, 16384 } });
+            DoCreateSparse(d3s, m100 + 12345, new long[][] { new long[] { 0, 1 << 20 }, new long[] { m100 - 4096, 16384 + 57 } });
             string e3;
             bool ok3 = CloneOk(d3s, d3d, out e3);
             if (!ok3) Console.WriteLine("      ERR: " + e3);
@@ -334,12 +334,31 @@ internal static class ReFsCloneTest
             string e10b;
             bool ok10b = CloneOk(d10bs, d10bd, out e10b);
             if (!ok10b) Console.WriteLine("      ERR: " + e10b);
-            Check("inherited-integrity clone exit (target must be switched off)", ok10b);
-            if (File.Exists(d10bd)) Check("dst integrity disabled to match", !IntegrityEnabled(d10bd));
+            Check("inherited-integrity clone exit", ok10b);
+            if (File.Exists(d10bd)) Check("dst integrity ENABLED to match inherited source", IntegrityEnabled(d10bd));
             if (File.Exists(d10bd)) Check("content equal (SHA256)", Sha(d10bs) == Sha(d10bd));
             File.Delete(d10bs); File.Delete(d10bd);
             SetIntegrity(dirInt, false, true);
             Directory.Delete(dirInt, true);
+
+            // reverse inheritance: source OFF, destination directory ON ->
+            // engine must switch the target OFF so both settings match.
+            string dirInt2 = Path.Combine(dir, "intdir2");
+            Directory.CreateDirectory(dirInt2);
+            SetIntegrity(dirInt2, true, true);
+            var d10cs = Path.Combine(dir, "off.src"); var d10cd = Path.Combine(dirInt2, "off.dst");
+            File.Delete(d10cs); File.Delete(d10cd);
+            CreateDense(d10cs, (1 << 20) + 222, 41);
+            Check("source integrity off", !IntegrityEnabled(d10cs));
+            string e10c;
+            bool ok10c = CloneOk(d10cs, d10cd, out e10c);
+            if (!ok10c) Console.WriteLine("      ERR: " + e10c);
+            Check("off-source into on-dir clone exit", ok10c);
+            if (File.Exists(d10cd)) Check("dst integrity DISABLED to match source", !IntegrityEnabled(d10cd));
+            if (File.Exists(d10cd)) Check("content equal (SHA256)", Sha(d10cs) == Sha(d10cd));
+            File.Delete(d10cs); File.Delete(d10cd);
+            SetIntegrity(dirInt2, false, true);
+            Directory.Delete(dirInt2, true);
 
             // [11] cancellation mid-clone must clean the partial target
             Console.WriteLine("\n[11] cancellation cleanup");

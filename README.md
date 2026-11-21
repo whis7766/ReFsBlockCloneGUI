@@ -1,64 +1,86 @@
 # ReFS 块克隆工具（ReFsBlockCloneGUI）
 
-Windows 上对 ReFS 卷内文件做**块级克隆**（Block Clone）的轻量工具，提供 **GUI** 与**无头 CLI** 两种使用方式。核心思想源自 Sergey Gruzdov（egel@egel.su）的 PowerShell 脚本，本项目以原生 .NET Framework（x64）重写，并修正了非对齐文件大小、同卷校验、失败零残留等问题。
+Windows 上对 **同一 ReFS 卷内** 的文件做块级克隆（Block Clone）的轻量工具，提供 **GUI** 与**无头 CLI** 两种用法。核心为原生 .NET Framework 4.8（x64）实现，理论依据以微软官方文献为准（见文末与 [docs/DESIGN.md](docs/DESIGN.md)）。
 
 ## 原理
 
-ReFS 的块克隆通过 `FSCTL_DUPLICATE_EXTENTS_TO_FILE` 实现：只复制文件的**物理块引用**（refcount），不读写任何数据字节，因此是纯元数据操作：
+`FSCTL_DUPLICATE_EXTENTS_TO_FILE` 让 ReFS 以**元数据操作**完成"复制"：只改写目标文件的 VCN→LCN 映射并增加物理簇引用计数，不读写数据字节；此后任何一方写入共享簇时，ReFS 通过 **allocate-on-write（写时复制）** 分配新簇，保证文件间隔离。因此：
 
-- 近零 NAND 写入，对 SSD 友好
-- 近零额外空间占用（克隆与源共享同一批物理簇）
-- 秒级完成（实测 8.2GB 文件约 0.6 秒）
+- 不复制数据字节（仍有少量元数据写入），对 SSD 写入放大友好；
+- 克隆与源共享物理簇，容量占用近零；
+- 删除源文件后克隆依然完整（引用计数语义）；
+- 大文件通常秒级完成（CI 在真实 ReFS 卷上有实测日志）。
 
-克隆与源共享物理簇；此后任一方的修改走写时复制（COW），互不影响；删除源后克隆依然完整（引用计数语义）。
+注意：块克隆**不是快照**。克隆期间若源文件被并发写入，结果不保证一致；请尽量对静止文件操作。
 
-## 功能
+## 微软文档核定的硬约束
 
-- GUI（WinForms）与无头 CLI 两种模式
-- 非簇对齐文件（稠密或稀疏）也能得到字节级一致的克隆：向上取整克隆后收缩回源精确大小
-- 稀疏文件克隆后保持稀疏
-- 强制源与目标位于**同一 ReFS 卷**，跨卷明确报错
-- 失败零残留：目标创建后最先设置删除待决标记，任何失败自动清理半成品
-- 不覆盖已有文件；GUI 单实例
-- 仅 64 位（`DUPLICATE_EXTENTS_DATA.FileHandle` 为固定 8 字节 HANDLE）
+| 约束 | 说明 |
+|---|---|
+| 同一 ReFS 卷 | 源与目标必须在同一卷；卷须以 Windows Server 2016+ 格式化 |
+| 簇对齐 | 源/目标偏移与长度必须是簇大小（4KB 或 64KB）的整数倍 |
+| 单次 < 4GB | 每次 FSCTL 的克隆区间长度必须小于 4GB（本工具按 100MB 分块） |
+| 目标不越界 | 目标区间不得超出目标 EOF；扩展目标须先 `SetEndOfFile` |
+| 完整性一致 | 源与目标的 Integrity Streams 设置必须相同（目标会继承父目录设置，需显式镜像） |
+| 稀疏规则 | 源稀疏 ⇒ 目标必须稀疏；本工具同时保证源稠密 ⇒ 目标稠密（属性保真） |
+| 引用上限 | 同一物理区域最多 8175 个文件区域引用；超限返回 `ERROR_BLOCK_TOO_MANY_REFERENCES`（347） |
+| 同文件不重叠 | 同文件内源/目标区间不得重叠 |
+| 机会锁 | 块克隆会打断共享机会锁（Level 2 Oplock） |
 
-## 实现
+另：自 Windows 11 24H2 / Windows Server 2025 起，系统受支持的复制操作已**原生**使用块克隆；本工具的价值在于显式、可控、可验证的克隆（含 CLI 与测试）。
+
+## 实现要点
 
 ```
 src/
-  ReFsBlockCloner.cs   核心引擎：封装全部 Win32 调用（唯一逻辑来源，GUI/CLI/测试共享）
-  MainForm.cs          WinForms 界面
+  ReFsBlockCloner.cs   核心引擎：全部 Win32 调用与唯一克隆逻辑（GUI/CLI/测试共享）
+  MainForm.cs          WinForms 界面（卷信息、进度、取消、拖放、日志）
   Program.cs           入口：单实例互斥体 + GUI / 无头 CLI 分支
 test/
-  ReFsCloneTest.cs     引擎验证程序（稠密/稀疏/零字节/跨卷用例）
+  ReFsCloneTest.cs     引擎验证矩阵（真实 ReFS 卷，4K 与 64K 簇）
+  GuiSmokeTest.cs      GUI 无头冒烟测试：真实克隆各状态渲染为 PNG 截图
+scripts/
+  New-ReFsTestVolumes.ps1  CI 用：VHDX 上制备 4K/64K 簇 ReFS 测试卷
 reference/
-  refsblockclone.fixed.ps1  原始 PowerShell 参考实现
+  refsblockclone.fixed.ps1  历史参考脚本（保留溯源；其中个别注释有误，见 DESIGN.md）
 ```
 
 引擎主流程：
 
-1. 打开源文件（GENERIC_READ），校验所在卷支持块引用（`FILE_SUPPORTS_BLOCK_REFCOUNTING`）
-2. 以 `CREATE_NEW` 创建目标，标记 sparse，先设置删除待决标记
-3. 校验目标卷支持块克隆且卷序列号与源一致
-4. 读取源完整性信息得到簇大小，把克隆区间向上取整到簇边界
-5. 复制源完整性设置，按 100MB 分块执行 `FSCTL_DUPLICATE_EXTENTS_TO_FILE`
-6. 把目标 EOF 收缩回源精确大小，清除删除待决标记
+1. 打开源（`GENERIC_READ`），校验卷具备 `FILE_SUPPORTS_BLOCK_REFCOUNTING`；
+2. 读取源大小、稀疏属性、完整性信息（含簇大小）；
+3. `CREATE_NEW` 创建目标（绝不覆盖），**立即**设置删除待决标记作为失败清理手段；
+4. 校验目标卷能力与卷序列号同源；镜像源的稀疏属性与完整性设置；
+5. `SetEndOfFile` 到源精确大小；对**簇对齐前缀**按 100MB 分块执行块克隆；
+6. 尾部不足一簇的部分用普通读写复制（稀疏源的空洞尾部保持空洞）；
+7. 成功后清除删除待决标记；任何失败路径关闭句柄即自动删除半成品。
 
-## 构建与发布
+关于"删除待决"（delete-pending）的准确语义：它是**进程级**清理辅助——句柄关闭时文件系统删除文件，可覆盖异常、取消、进程被杀等路径；它**不是**块克隆的前提条件，也**不保证**操作系统崩溃/断电后的清理（该标记不跨崩溃持久化）。单次 FSCTL 本身是原子的，但多分块序列整体不是事务，故应用层清理仍然必要。创建与标记之间的极小窗口另有 `DeleteFileW` 兜底。
 
-目标 .NET Framework 4.8（Windows 自带），无需安装 .NET SDK。本地构建：
+## 构建与 CI
+
+目标 .NET Framework 4.8（Windows 自带），无需安装 .NET SDK：
 
 ```powershell
 msbuild ReFsBlockCloneGUI.sln /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /m
 ```
 
-产物：`x64\Release\ReFsBlockCloneGUI.exe`（及 `x64\Release\ReFsCloneTest.exe`）。
+产物：`src\x64\Release\ReFsBlockCloneGUI.exe`、`test\x64\Release\ReFsCloneTest.exe`、`test\x64\Release\GuiSmokeTest.exe`。
 
-GitHub Actions 已配置在 `.github/workflows/build-release.yml`：手动触发（`workflow_dispatch`）并填写 Release tag 后，自动用 MSBuild 编译 Release x64 并发布到 GitHub Release。
+**所有编译、运行、调试、测试都在 GitHub Actions 的 Windows runner 上完成**（`.github/workflows/ci.yml`，push / PR / 手动触发）：
+
+1. MSBuild 编译 Release x64；
+2. 在动态 VHDX 上制备两个真实 ReFS 卷（R: 4KB 簇、S: 64KB 簇）；
+3. 引擎矩阵：非对齐稠密/稀疏、稀疏尾洞、零字节、亚簇小文件、跨卷（ReFS→NTFS、ReFS→ReFS）拒绝、完整性开启/目录继承、取消清理、8175 引用上限、8.2GB 全尺度（磁盘空间足够时）；
+4. 无头 CLI 成功/失败路径与哈希校验；
+5. GUI 冒烟测试：真实克隆的初始/填充/进度/成功/取消/错误/最小尺寸状态截图（PNG 产物）；
+6. 上传日志、截图与二进制产物。
+
+发布：手动触发 `Build and Release` 并填写 tag（发布前跑 quick 引擎验证）。
 
 ## 使用
 
-**GUI**：双击 `ReFsBlockCloneGUI.exe`，选择源文件与目标路径后点击“开始克隆”。
+**GUI**：双击 `ReFsBlockCloneGUI.exe`，选择源文件（支持拖放），目标路径自动建议（可改），点击"开始克隆"；可中途取消；卷信息面板实时显示文件系统、簇大小、完整性与同卷校验。
 
 **CLI**：
 
@@ -66,10 +88,20 @@ GitHub Actions 已配置在 `.github/workflows/build-release.yml`：手动触发
 ReFsBlockCloneGUI.exe <源文件> <目标文件>
 ```
 
-无界面，运行后在当前目录写 `refsclone_headless.log`（UTF-8 带 BOM）；退出码 `0`=成功，`1`=失败。
+无界面；在当前目录追加写 `refsclone_headless.log`（UTF-8 带 BOM）；退出码 `0`=成功，`1`=失败。
 
 ## 注意事项
 
-- 仅支持 64 位 Windows 10/11；目标需为支持块引用的 ReFS 版本
-- 源与目标必须在同一 ReFS 卷（可不同目录）
-- 目标已存在会报错，不覆盖
+- 仅 64 位 Windows（ReFS 块克隆仅存在于 x64 Windows）；
+- 源与目标必须同一 ReFS 卷（可不同目录）；目标已存在会报错，不覆盖；
+- 错误信息附 Win32 错误码与针对 ReFS 的中文提示（如 347 引用上限、50 约束不满足等）。
+
+## 文献
+
+- [Block Cloning（Win32）](https://learn.microsoft.com/en-us/windows/win32/fileio/block-cloning)
+- [Block cloning on ReFS](https://learn.microsoft.com/en-us/windows-server/storage/refs/block-cloning)
+- [FSCTL_DUPLICATE_EXTENTS_TO_FILE](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_duplicate_extents_to_file)
+- [[MS-FSA] 2.1.5.10.4 FSCTL_DUPLICATE_EXTENTS_TO_FILE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/4623bf0a-ab5f-4ab6-9c03-b8372c7aa06b)
+- [[MS-FSCC] 2.3.7 / 2.3.9](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/78e67b4b-84a4-4730-a34f-dcdcb2224e49)
+- [ReFS integrity streams](https://learn.microsoft.com/en-us/windows-server/storage/refs/integrity-streams)
+- [FILE_DISPOSITION_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_disposition_info)
