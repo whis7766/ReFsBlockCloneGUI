@@ -134,6 +134,40 @@ internal static class ReFsCloneTest
         return string.Join(",", r.Select(x => x[0] + "+" + x[1]));
     }
 
+    // Ground-truth allocated map derived by scanning bytes (4K units), independent
+    // of any file system's QUERY_ALLOCATED_RANGES reporting quirks.
+    private static List<long[]> ScanRanges(string p)
+    {
+        var res = new List<long[]>();
+        using (var f = File.OpenRead(p))
+        {
+            var buf = new byte[1 << 20];
+            long off = 0, runStart = -1; int n;
+            while ((n = f.Read(buf, 0, buf.Length)) > 0)
+            {
+                for (int i = 0; i < n; i += 4096)
+                {
+                    int end = Math.Min(i + 4096, n);
+                    bool zero = true;
+                    for (int k = i; k < end; k++) if (buf[k] != 0) { zero = false; break; }
+                    long u = off + i;
+                    if (!zero) { if (runStart < 0) runStart = u; }
+                    else if (runStart >= 0) { res.Add(new long[] { runStart, u - runStart }); runStart = -1; }
+                }
+                off += n;
+            }
+            if (runStart >= 0) res.Add(new long[] { runStart, off - runStart });
+        }
+        return res;
+    }
+
+    private static bool RangesEqual(List<long[]> a, List<long[]> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++) if (a[i][0] != b[i][0] || a[i][1] != b[i][1]) return false;
+        return true;
+    }
+
     // Best-effort variant: report mismatch as INFO (used where the destination
     // file system may not support hole punching, e.g. ReFS SET_ZERO_DATA).
     private static void InfoHoles(string label, string a, string b)
@@ -615,7 +649,15 @@ internal static class ReFsCloneTest
                 Check("physical sparse content equal", eqc);
             }
             if (File.Exists(p14b)) Check("physical sparse dst SPARSE", IsSparse(p14b));
-            if (File.Exists(p14b)) CheckHoles("physical sparse NTFS", d14bs, p14b);
+            if (File.Exists(p14b))
+            {
+                List<long[]> dm;
+                if (RefsBlockCloner.TryQueryAllocatedRanges(p14b, out dm))
+                    Check("physical sparse NTFS hole map matches source scan",
+                        RangesEqual(ScanRanges(d14bs), dm));
+                else
+                    Info("physical sparse NTFS: QAR unsupported on dst; hole-map check skipped");
+            }
             File.Delete(p14b);
 
             // ReFS destination: content + sparse attribute; punching best-effort.
