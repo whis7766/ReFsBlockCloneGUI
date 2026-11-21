@@ -53,14 +53,16 @@ jobs:
           $bytes = New-Object byte[] (4MB + 123)
           (New-Object Random 7).NextBytes($bytes)
           [IO.File]::WriteAllBytes($src, $bytes)
-          & $exe $src $dst
-          $ok = $LASTEXITCODE
+          # WinExe (GUI subsystem): PowerShell '&' does not wait nor set
+          # $LASTEXITCODE for GUI apps; Start-Process -Wait -PassThru does.
+          $p = Start-Process -FilePath $exe -ArgumentList "`"$src`"","`"$dst`"" -Wait -PassThru -NoNewWindow
+          $ok = $p.ExitCode
           Write-Host "CLI success exit: $ok"
           if ($ok -ne 0) { exit 1 }
           if (-not (Test-Path $dst)) { Write-Host "dst missing"; exit 1 }
           if ((Get-FileHash $src).Hash -ne (Get-FileHash $dst).Hash) { Write-Host "hash mismatch"; exit 1 }
-          & $exe $src "C:\cli_should_fail.dst"
-          $bad = $LASTEXITCODE
+          $p2 = Start-Process -FilePath $exe -ArgumentList "`"$src`"","`"C:\cli_should_fail.dst`"" -Wait -PassThru -NoNewWindow
+          $bad = $p2.ExitCode
           Write-Host "CLI cross-volume exit: $bad"
           if ($bad -ne 1) { exit 1 }
           if (Test-Path "C:\cli_should_fail.dst") { Write-Host "orphan on NTFS"; exit 1 }
