@@ -187,6 +187,9 @@ internal static class GuiSmokeTest
             Check("cross-volume dst absent", !File.Exists(ntfsDst));
             Check("error dialog recorded", Dialogs.Exists(d => d.StartsWith("错误")));
             Check("log shows failure", _form.LogText.Contains("失败"));
+            // let the debounced volume probe refresh so the screenshot shows
+            // the red cross-volume indicator, not the stale same-volume one
+            PumpUntil(() => Find<Label>("lblVolDst").Text.Contains("不同卷"), 2000);
             Snap("06-error");
             File.Delete(ntfsDst);
 
