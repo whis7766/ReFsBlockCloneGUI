@@ -3,7 +3,9 @@
 // Usage: ReFsCloneTest.exe <ReFS-drive e.g. R> [second-ReFS-drive e.g. S] [quick|full]
 //   R : 4K-cluster ReFS volume   S : 64K-cluster ReFS volume (optional but recommended)
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
