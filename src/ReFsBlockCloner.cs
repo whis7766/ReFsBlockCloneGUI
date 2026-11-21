@@ -400,56 +400,31 @@ namespace ReFsBlockClone
                 var data = new byte[BLK];
                 long done = 0;
                 uint n;
-                List<long[]> ranges;
-                if (TryQueryAllocatedRanges(src, out ranges))
+                bool zeroOk = true;
+                while (done < (long)srcSize)
                 {
-                    // Range-driven copy: transfer ONLY allocated runs; the gaps
-                    // are never written, so holes are preserved exactly on any
-                    // sparse-capable destination and write volume is minimal.
-                    foreach (var r in ranges)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    uint want = (uint)Math.Min(BLK, (long)srcSize - done);
+                    if (!NativeMethods.ReadFile(hIn, data, want, out n, IntPtr.Zero) || n == 0)
+                        throw WinErr(Marshal.GetLastWin32Error(), "读取源文件失败");
+                    // Split the block into 4K-granular zero / non-zero runs so
+                    // sub-block zero tails are punched too (hole-map fidelity).
+                    // Every byte is processed linearly => content always exact.
+                    int i = 0;
+                    while (i < n)
                     {
-                        long off = r[0], len = r[1], copied = 0;
-                        long np;
-                        if (!NativeMethods.SetFilePointerEx(hIn, off, out np, NativeMethods.FILE_BEGIN))
-                            throw WinErr(Marshal.GetLastWin32Error(), "无法定位源文件");
-                        while (copied < len)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            uint want = (uint)Math.Min(BLK, len - copied);
-                            if (!NativeMethods.ReadFile(hIn, data, want, out n, IntPtr.Zero) || n == 0)
-                                throw WinErr(Marshal.GetLastWin32Error(), "读取源文件失败");
-                            if (!NativeMethods.SetFilePointerEx(hOut, off + copied, out np, NativeMethods.FILE_BEGIN))
-                                throw WinErr(Marshal.GetLastWin32Error(), "无法定位目标文件");
-                            uint w;
-                            if (!NativeMethods.WriteFile(hOut, data, n, out w, IntPtr.Zero) || w != n)
-                                throw WinErr(Marshal.GetLastWin32Error(), "写入目标文件失败");
-                            copied += n;
-                            done = off + copied;
-                            if (progress != null) progress.Report(new CloneProgress(done, (long)srcSize));
-                        }
-                    }
-                    SetEof(hOut, srcSize); // ranges may end before EOF (trailing hole)
-                    if (progress != null) progress.Report(new CloneProgress((long)srcSize, (long)srcSize));
-                }
-                else
-                {
-                    // Fallback (no QUERY_ALLOCATED_RANGES): block scan + zero punch.
-                    bool zeroOk = true;
-                    while (done < (long)srcSize)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        uint want = (uint)Math.Min(BLK, (long)srcSize - done);
-                        if (!NativeMethods.ReadFile(hIn, data, want, out n, IntPtr.Zero) || n == 0)
-                            throw WinErr(Marshal.GetLastWin32Error(), "读取源文件失败");
-                        bool allZero = true;
-                        for (int i = 0; i < n; i++) if (data[i] != 0) { allZero = false; break; }
+                        bool z = ZeroAt(data, i, n);
+                        int j = i;
+                        while (j < n && ZeroAt(data, j, n) == z) j += 4096;
+                        if (j > n) j = n;
+                        int runLen = j - i;
                         bool punched = false;
-                        if (srcSparse && allZero && zeroOk)
+                        if (z && srcSparse && zeroOk)
                         {
                             var zd = new FILE_ZERO_DATA_INFORMATION
                             {
-                                FileOffset = done,
-                                BeyondFinalZero = done + n
+                                FileOffset = done + i,
+                                BeyondFinalZero = done + j
                             };
                             int sz = Marshal.SizeOf(typeof(FILE_ZERO_DATA_INFORMATION));
                             IntPtr zb = Marshal.AllocHGlobal(sz);
@@ -463,22 +438,25 @@ namespace ReFsBlockClone
                                 if (zeroOk)
                                     _log("警告：FSCTL_SET_ZERO_DATA 打洞失败（Win32 " +
                                         Marshal.GetLastWin32Error() + "），回退为写零（目标该段将占用物理空间）。");
-                                zeroOk = false; // fall back to writing zeros
+                                zeroOk = false;
                             }
                             Marshal.FreeHGlobal(zb);
                         }
                         if (!punched)
                         {
+                            var run = new byte[runLen];
+                            Array.Copy(data, i, run, 0, runLen);
                             long np;
-                            if (!NativeMethods.SetFilePointerEx(hOut, done, out np, NativeMethods.FILE_BEGIN))
+                            if (!NativeMethods.SetFilePointerEx(hOut, done + i, out np, NativeMethods.FILE_BEGIN))
                                 throw WinErr(Marshal.GetLastWin32Error(), "无法定位目标文件");
                             uint w;
-                            if (!NativeMethods.WriteFile(hOut, data, n, out w, IntPtr.Zero) || w != n)
+                            if (!NativeMethods.WriteFile(hOut, run, (uint)runLen, out w, IntPtr.Zero) || w != runLen)
                                 throw WinErr(Marshal.GetLastWin32Error(), "写入目标文件失败");
                         }
-                        done += n;
-                        if (progress != null) progress.Report(new CloneProgress(done, (long)srcSize));
+                        i = j;
                     }
+                    done += n;
+                    if (progress != null) progress.Report(new CloneProgress(done, (long)srcSize));
                 }
                 _log(string.Format("物理复制 {0} 字节完成。", srcSize));
 
@@ -708,6 +686,14 @@ namespace ReFsBlockClone
         {
             if (h != IntPtr.Zero && h != NativeMethods.INVALID_HANDLE_VALUE)
                 NativeMethods.CloseHandle(h);
+        }
+
+        // True when the 4K unit starting at `start` (clamped to `n`) is all zero.
+        private static bool ZeroAt(byte[] b, int start, int n)
+        {
+            int end = Math.Min(start + 4096, n);
+            for (int k = start; k < end; k++) if (b[k] != 0) return false;
+            return true;
         }
 
         private static void SetDisposition(IntPtr h, bool delete)

@@ -147,7 +147,13 @@ internal static class ReFsCloneTest
         string grpD = acD.GetGroup(typeof(System.Security.Principal.SecurityIdentifier)).Value;
         Check("owner mirrored", ownS == ownD);
         Check("group mirrored", grpS == grpD);
-        Check("effective DACL mirrored", EffectiveAcl(acS) == EffectiveAcl(acD));
+        string eaS = EffectiveAcl(acS), eaD = EffectiveAcl(acD);
+        if (eaS != eaD)
+        {
+            Console.WriteLine("      eff src: " + eaS);
+            Console.WriteLine("      eff dst: " + eaD);
+        }
+        Check("effective DACL mirrored", eaS == eaD);
     }
 
     private static string EffectiveAcl(FileSecurity fs)
