@@ -36,7 +36,7 @@ namespace ReFsBlockClone
         private readonly Label _lblVolSrc = new Label { Name = "lblVolSrc" };
         private readonly Label _lblVolDst = new Label { Name = "lblVolDst" };
         private readonly TextBox _txtLog = new TextBox { Name = "txtLog" };
-        private readonly ToolStripStatusLabel _status = new ToolStripStatusLabel { Name = "statusLabel" };
+        private readonly Label _status = new Label { Name = "statusLabel" };
 
         private readonly System.Windows.Forms.Timer _probeTimer = new System.Windows.Forms.Timer { Interval = 300 };
         private int _probeSeq;
@@ -179,14 +179,25 @@ namespace ReFsBlockClone
             root.Controls.Add(pnlActions, 0, 3);
             root.Controls.Add(grpLog, 0, 4);
 
-            var strip = new StatusStrip { Name = "statusStrip" };
-            _status.Text = "就绪。选择源文件与目标路径后开始克隆。";
-            _status.Spring = true;
+            // Plain panel+label status bar: ToolStrip/StatusStrip items do not
+            // render under DrawToBitmap (WM_PRINT), which the CI screenshots use.
+            var statusPanel = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 26,
+                BackColor = SystemColors.Control,
+                Padding = new Padding(8, 0, 8, 0)
+            };
+            statusPanel.Paint += (s, e) =>
+                e.Graphics.DrawLine(SystemPens.ControlDark, 0, 0, statusPanel.Width, 0);
+            _status.Dock = DockStyle.Fill;
             _status.TextAlign = ContentAlignment.MiddleLeft;
-            strip.Items.Add(_status);
+            _status.AutoEllipsis = true;
+            _status.Text = "就绪。选择源文件与目标路径后开始克隆。";
+            statusPanel.Controls.Add(_status);
 
             Controls.Add(root);
-            Controls.Add(strip);
+            Controls.Add(statusPanel);
 
             _txtSource.TextChanged += (s, e) => { SuggestDest(); KickProbe(); UpdateCloneEnabled(); };
             _txtDest.TextChanged += (s, e) => { if (!_settingDest) _destAuto = false; KickProbe(); UpdateCloneEnabled(); };

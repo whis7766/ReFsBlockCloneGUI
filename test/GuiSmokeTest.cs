@@ -187,8 +187,8 @@ internal static class GuiSmokeTest
             Snap("06-error");
             File.Delete(ntfsDst);
 
-            // ---- destination-exists validation ----
-            Find<TextBox>("txtDest").Text = smallSrc;
+            // ---- destination-exists validation (use a file that is NOT the source) ----
+            Find<TextBox>("txtDest").Text = bigSrc;
             Dialogs.Clear();
             var t4 = _form.DoCloneAsync();
             PumpUntil(() => t4.IsCompleted, 10000);
