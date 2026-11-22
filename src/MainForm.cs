@@ -175,7 +175,6 @@ namespace ReFsBlockClone
         private TextBox _txtLog = new TextBox { Name = "txtLog" };
         private CheckBox _chkPhysical = new CheckBox { Name = "chkPhysical" };
         private Label _status = new Label { Name = "statusLabel" };
-        private PictureBox _logo = new PictureBox { Name = "picLogo" };
 
         private readonly System.Windows.Forms.Timer _probeTimer = new System.Windows.Forms.Timer { Interval = 300 };
         private int _probeSeq;
@@ -291,9 +290,9 @@ namespace ReFsBlockClone
 
         private void BuildUi()
         {
-            Text = "ReFS 块克隆";
-            ClientSize = new Size(832, 636);
-            MinimumSize = new Size(736, 560);
+            Text = "";
+            ClientSize = new Size(832, 584);
+            MinimumSize = new Size(736, 508);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Theme.Bg;
             Font = new Font("Microsoft YaHei UI", 9F);
@@ -304,24 +303,6 @@ namespace ReFsBlockClone
             DragDrop += OnDragDrop;
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape && _busy) CancelClone(); };
 
-            _logo.Size = new Size(36, 36);
-            _logo.Location = new Point(0, 8);
-            _logo.SizeMode = PictureBoxSizeMode.Zoom;
-            _logo.BackColor = Color.Transparent;
-            if (AppIcon != null) _logo.Image = AppIcon.ToBitmap();
-
-            var title = new Label
-            {
-                AutoSize = true,
-                Text = "ReFS 块克隆",
-                Font = new Font("Microsoft YaHei UI", 14F, FontStyle.Bold),
-                ForeColor = Theme.Text,
-                Location = new Point(48, 14)
-            };
-
-            var header = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
-            header.Controls.Add(_logo);
-            header.Controls.Add(title);
 
             StyleField(_txtSource);
             StyleField(_txtDest);
@@ -420,20 +401,18 @@ namespace ReFsBlockClone
             logGrid.Controls.Add(_txtLog, 0, 1);
             logCard.Controls.Add(logGrid);
 
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(18, 12, 18, 10), BackColor = Theme.Bg };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(18, 16, 18, 10), BackColor = Theme.Bg };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            root.Controls.Add(header, 0, 0);
-            root.Controls.Add(cardSrc, 0, 1);
-            root.Controls.Add(cardDst, 0, 2);
-            root.Controls.Add(meta, 0, 3);
-            root.Controls.Add(actions, 0, 4);
-            root.Controls.Add(logCard, 0, 5);
+            root.Controls.Add(cardSrc, 0, 0);
+            root.Controls.Add(cardDst, 0, 1);
+            root.Controls.Add(meta, 0, 2);
+            root.Controls.Add(actions, 0, 3);
+            root.Controls.Add(logCard, 0, 4);
 
             var bar = new Panel { Dock = DockStyle.Bottom, Height = 28, BackColor = Color.White, Padding = new Padding(18, 0, 18, 0) };
             bar.Paint += (s, e) =>
