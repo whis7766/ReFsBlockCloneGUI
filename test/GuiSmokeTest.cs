@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -33,6 +34,8 @@ internal static class GuiSmokeTest
         return found.Length > 0 ? (T)found[0] : null;
     }
 
+    private static void Info(string m) { Console.WriteLine("  [INFO] " + m); }
+
     private static void Snap(string name)
     {
         Application.DoEvents();
@@ -55,6 +58,87 @@ internal static class GuiSmokeTest
             Application.DoEvents();
             Thread.Sleep(10);
         }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr FindWindowW(string cls, string title);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr h, out RECT r);
+
+    [DllImport("user32.dll")]
+    private static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumProc cb, IntPtr l);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassNameW(IntPtr h, System.Text.StringBuilder sb, int max);
+
+    private delegate bool EnumProc(IntPtr h, IntPtr l);
+
+    private static IntPtr FindDialog(uint pid)
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((h, l) =>
+        {
+            uint p; GetWindowThreadProcessId(h, out p);
+            if (p != pid) return true;
+            var sb = new System.Text.StringBuilder(64);
+            GetClassNameW(h, sb, sb.Capacity);
+            if (sb.ToString() == "#32770") { found = h; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    private static bool CaptureDialog(string title, Action open, string path)
+    {
+        bool ok = false;
+        uint pid = (uint)Process.GetCurrentProcess().Id;
+        var t = new Thread(() =>
+        {
+            IntPtr h = IntPtr.Zero;
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < 12000)
+            {
+                h = FindWindowW(null, title);
+                if (h == IntPtr.Zero) h = FindDialog(pid);
+                if (h != IntPtr.Zero) break;
+                Thread.Sleep(100);
+            }
+            if (h == IntPtr.Zero) return;
+            Thread.Sleep(500);
+            RECT r; GetWindowRect(h, out r);
+            int w = r.Right - r.Left, hh = r.Bottom - r.Top;
+            if (w <= 0 || hh <= 0) return;
+            using (var bmp = new Bitmap(w, hh))
+            {
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    IntPtr hdc = g.GetHdc();
+                    ok = PrintWindow(h, hdc, 2) || PrintWindow(h, hdc, 0);
+                    g.ReleaseHdc(hdc);
+                }
+                bmp.Save(path, ImageFormat.Png);
+            }
+            PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero);
+        });
+        t.IsBackground = true;
+        t.SetApartmentState(ApartmentState.MTA);
+        t.Start();
+        open();
+        t.Join(6000);
+        return ok && File.Exists(path);
     }
 
     private static string Sha(string p)
@@ -226,6 +310,19 @@ internal static class GuiSmokeTest
             PumpUntil(() => t4.IsCompleted, 10000);
             Check("exists dialog recorded", Dialogs.Exists(d => d.Contains("已存在")));
             Snap("07-exists");
+
+            if (args.Length > 3 && args[3] == "dialogs")
+            {
+                Console.WriteLine("\n[dialogs] native file pickers");
+                Find<TextBox>("txtSource").Text = smallSrc;
+                Find<TextBox>("txtDest").Text = smallDst;
+                Info("open dialog captured: " + CaptureDialog("选择源文件",
+                    () => Find<Button>("btnBrowseSource").PerformClick(),
+                    Path.Combine(_outDir, "10-open-dialog.png")));
+                Info("save dialog captured: " + CaptureDialog("选择目标路径",
+                    () => Find<Button>("btnBrowseDest").PerformClick(),
+                    Path.Combine(_outDir, "11-save-dialog.png")));
+            }
 
             // ---- minimum-size layout ----
             _form.Size = _form.MinimumSize;

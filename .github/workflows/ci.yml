@@ -108,7 +108,7 @@ jobs:
       - name: GUI smoke test with state screenshots
         run: |
           New-Item -ItemType Directory -Force -Path gui-shots | Out-Null
-          & test\x64\Release\GuiSmokeTest.exe R gui-shots C *>&1 | Tee-Object -FilePath gui-test.log
+          & test\x64\Release\GuiSmokeTest.exe R gui-shots C dialogs *>&1 | Tee-Object -FilePath gui-test.log
           $code = $LASTEXITCODE
           Write-Host "gui exit code: $code"
           exit $code
