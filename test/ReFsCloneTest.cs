@@ -611,67 +611,6 @@ internal static class ReFsCloneTest
                 File.Delete(d13s);
             }
 
-            // [14] physical copy strategy: cross-volume + sparse hole punching
-            Console.WriteLine("\n[14] physical copy strategy");
-            var d14s = Path.Combine(dir, "d14.src");
-            File.Delete(d14s);
-            CreateDense(d14s, (1 << 20) + 999, 43);
-            string p14d = Path.Combine(Path.GetTempPath(), "reftest_phys_" + Guid.NewGuid().ToString("N") + ".dst");
-            File.Delete(p14d);
-            bool ok14 = true; string e14 = "";
-            try { new RefsBlockCloner(s => Console.WriteLine("      | " + s)).ClonePhysical(d14s, p14d); }
-            catch (Exception ex) { ok14 = false; e14 = ex.Message; }
-            Check("physical cross-volume exit", ok14);
-            if (!ok14) Console.WriteLine("      ERR: " + e14);
-            Check("physical dst exists", File.Exists(p14d));
-            if (File.Exists(p14d)) Check("physical content equal", Sha(d14s) == Sha(p14d));
-            if (File.Exists(p14d)) CheckMetadata(d14s, p14d);
-            File.Delete(p14d);
-
-            var d14bs = Path.Combine(dir, "d14b.src");
-            File.Delete(d14bs);
-            DoCreateSparse(d14bs, m100 + 12345, new long[][] { new long[] { 0, 1 << 20 }, new long[] { 50 * 1024 * 1024, 64 * 1024 } });
-            // NTFS destination: hole punching (FSCTL_SET_ZERO_DATA) is supported.
-            string p14b = Path.Combine(Path.GetTempPath(), "reftest_phys_sparse_" + Guid.NewGuid().ToString("N") + ".dst");
-            File.Delete(p14b);
-            bool ok14b = true; string e14b = "";
-            try { new RefsBlockCloner(s => { }).ClonePhysical(d14bs, p14b); }
-            catch (Exception ex) { ok14b = false; e14b = ex.Message; }
-            Check("physical sparse exit (NTFS dst)", ok14b);
-            if (!ok14b) Console.WriteLine("      ERR: " + e14b);
-            List<long[]> qar;
-            if (RefsBlockCloner.TryQueryAllocatedRanges(d14bs, out qar))
-                Console.WriteLine("      src QAR ranges: " + string.Join(",", qar.Select(x => x[0] + "+" + x[1])));
-            if (File.Exists(p14b))
-            {
-                bool eqc = Sha(d14bs) == Sha(p14b);
-                if (!eqc) Console.WriteLine("      first diff offset: " + FirstDiff(d14bs, p14b));
-                Check("physical sparse content equal", eqc);
-            }
-            if (File.Exists(p14b)) Check("physical sparse dst SPARSE", IsSparse(p14b));
-            if (File.Exists(p14b))
-            {
-                List<long[]> dm;
-                if (RefsBlockCloner.TryQueryAllocatedRanges(p14b, out dm))
-                    Check("physical sparse NTFS hole map matches source scan",
-                        RangesEqual(ScanRanges(d14bs), dm));
-                else
-                    Info("physical sparse NTFS: QAR unsupported on dst; hole-map check skipped");
-            }
-            File.Delete(p14b);
-
-            // ReFS destination: content + sparse attribute; punching best-effort.
-            string r14b = Path.Combine(dir, "d14b.dst");
-            File.Delete(r14b);
-            bool ok14c = true;
-            try { new RefsBlockCloner(s => { }).ClonePhysical(d14bs, r14b); }
-            catch (Exception ex) { ok14c = false; Console.WriteLine("      ERR: " + ex.Message); }
-            Check("physical sparse exit (ReFS dst)", ok14c);
-            if (File.Exists(r14b)) Check("physical sparse ReFS content equal", Sha(d14bs) == Sha(r14b));
-            if (File.Exists(r14b)) Check("physical sparse ReFS dst SPARSE", IsSparse(r14b));
-            if (File.Exists(r14b)) InfoHoles("physical sparse ReFS", d14bs, r14b);
-            File.Delete(d14s); File.Delete(d14bs); File.Delete(r14b);
-
             Console.WriteLine("\n==== RESULT: PASS=" + _pass + " FAIL=" + _fail + " ====");
             return _fail == 0 ? 0 : 1;
         }

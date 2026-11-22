@@ -201,7 +201,6 @@ namespace ReFsBlockClone
         private Label _lblVolSrc = new Label { Name = "lblVolSrc" };
         private Label _lblVolDst = new Label { Name = "lblVolDst" };
         private TextBox _txtLog = new TextBox { Name = "txtLog" };
-        private CheckBox _chkPhysical = new CheckBox { Name = "chkPhysical" };
         private Label _status = new Label { Name = "statusLabel" };
 
         private readonly System.Windows.Forms.Timer _probeTimer = new System.Windows.Forms.Timer { Interval = 300 };
@@ -360,17 +359,6 @@ namespace ReFsBlockClone
                 _txtDest.Text = p;
             };
 
-            _chkPhysical.Text = "物理复制";
-            _chkPhysical.AutoSize = false;
-            _chkPhysical.Dock = DockStyle.Fill;
-            _chkPhysical.TextAlign = ContentAlignment.MiddleLeft;
-            _chkPhysical.Font = new Font("Microsoft YaHei UI", 8.5F);
-            _chkPhysical.ForeColor = Theme.Muted;
-            _chkPhysical.BackColor = Theme.Card;
-            _chkPhysical.Cursor = Cursors.Hand;
-            _chkPhysical.Margin = new Padding(0);
-            _chkPhysical.CheckedChanged += (s, e) => KickProbe();
-
             var cardSrc = FileCard("源文件", _txtSource, btnBrowseSource, null);
             var cardDst = FileCard("目标文件", _txtDest, btnBrowseDest, null);
 
@@ -410,17 +398,14 @@ namespace ReFsBlockClone
             _lblPercent.ForeColor = Theme.Muted;
             _lblPercent.Text = "0%";
 
-            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, BackColor = Theme.Bg };
-            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112F));
+            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, BackColor = Theme.Bg };
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138F));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104F));
-            _chkPhysical.Margin = new Padding(2, 0, 8, 0);
-            actions.Controls.Add(_chkPhysical, 0, 0);
-            actions.Controls.Add(_btnClone, 1, 0);
-            actions.Controls.Add(_btnCancel, 2, 0);
-            actions.Controls.Add(_lblPercent, 4, 0);
+            actions.Controls.Add(_btnClone, 0, 0);
+            actions.Controls.Add(_btnCancel, 1, 0);
+            actions.Controls.Add(_lblPercent, 3, 0);
 
             _txtLog.Multiline = true;
             _txtLog.ReadOnly = true;
@@ -554,14 +539,8 @@ namespace ReFsBlockClone
             }
             else if (_srcInfo != null && _dstInfo.Serial == _srcInfo.Serial && _dstInfo.SupportsBlockClone)
             {
-                _lblVolDst.Text = string.Format("目标：同卷 · {0}{1}",
-                    _dstInfo.FileSystem, _chkPhysical.Checked ? " · 物理复制" : "");
+                _lblVolDst.Text = string.Format("目标：同卷 · {0}", _dstInfo.FileSystem);
                 _lblVolDst.ForeColor = Theme.Good;
-            }
-            else if (_chkPhysical.Checked)
-            {
-                _lblVolDst.Text = string.Format("目标：{0} · 物理复制", _dstInfo.FileSystem);
-                _lblVolDst.ForeColor = Theme.Muted;
             }
             else
             {
@@ -643,7 +622,6 @@ namespace ReFsBlockClone
                 return;
             }
 
-            bool physical = _chkPhysical.Checked;
             bool crossVolume;
             if (_srcInfo != null && _dstInfo != null)
                 crossVolume = _srcInfo.Serial != _dstInfo.Serial;
@@ -653,7 +631,7 @@ namespace ReFsBlockClone
                 crossVolume = !string.IsNullOrEmpty(sr) && !string.IsNullOrEmpty(dr) &&
                     !string.Equals(sr, dr, StringComparison.OrdinalIgnoreCase);
             }
-            if (crossVolume && !physical)
+            if (crossVolume)
             {
                 if (UiHooks.ShowMessage(this,
                     "源文件与目标文件不在同一卷。\n块克隆要求源与目标位于同一 ReFS 卷，继续将被拒绝。仍要继续吗？",
@@ -670,7 +648,6 @@ namespace ReFsBlockClone
             _txtLog.Clear();
             AppendLog("源文件：   " + src);
             AppendLog("目标文件： " + dst);
-            AppendLog("模式：     " + (physical ? "物理复制（不共享块）" : "块克隆（共享物理簇）"));
             AppendLog("----------------------------------------");
 
             _cts = new CancellationTokenSource();
@@ -686,8 +663,7 @@ namespace ReFsBlockClone
                 await Task.Run(() =>
                 {
                     var cloner = new RefsBlockCloner(AppendLog);
-                    if (physical) cloner.ClonePhysical(src, dst, progress, _cts.Token);
-                    else cloner.Clone(src, dst, progress, _cts.Token);
+                    cloner.Clone(src, dst, progress, _cts.Token);
                 });
                 sw.Stop();
                 AppendLog("----------------------------------------");

@@ -170,14 +170,14 @@ DPI PerMonitorV2 + longPathAware manifest。
 
 ## 7. 第二轮审计：稀疏 / 速度 / 写入量 / 使用适配（CI run 15，commit 5a9d32f，全绿）
 
-引擎 **69 PASS / 0 FAIL**、GUI **27 PASS / 0 FAIL**（9 态截图，含物理模式）。
+引擎 **69 PASS / 0 FAIL**、GUI **27 PASS / 0 FAIL**（8 态截图）。
 
 ### 7.1 稀疏文件兼容性（问题①）
 
 - 块克隆路径：源稀疏 ⇒ 目标 `FSCTL_SET_SPARSE` 镜像；对齐前缀经 refcount 共享，
   空洞随映射天然保留；尾部不足一簇若为空洞则不写。4K 与 64K 簇卷空洞图均一致。
-- 物理路径：线性全量扫描 + **4K 粒度零 run 打洞**（`FSCTL_SET_ZERO_DATA`），
-  非零 run 才写盘。内容字节级一致；空洞图与"源字节扫描 ground truth"一致。
+- 曾实现的物理复制路径（4K 零 run 打洞）已按用户要求整体移除；QAR 与
+  `FSCTL_SET_ZERO_DATA` 的实测结论保留在审计记录中，不再参与产品路径。
 - **实测新事实**：现代 ReFS（Server 2025）**支持** `FSCTL_QUERY_ALLOCATED_RANGES`
   （Win32 旧支持矩阵列 ReFS=No 已过时），也支持 `FSCTL_SET_ZERO_DATA`。
   但 ReFS 的 QAR 对稀疏文件**首簇报告有偏差**（把已分配的首簇报成空洞），
@@ -208,11 +208,11 @@ CI 基准（2GB 随机源，R: 4K ReFS VHDX，宿主写入以动态 VHDX 新增�
 
 已落地的降写入手段：
 1. 块克隆：数据字节 0 写入（仅元数据/refcount）。
-2. 稀疏镜像 + 物理模式 4K 零 run 打洞：只写非零单元，空洞不占物理空间。
+2. 稀疏镜像：空洞随共享簇保留，不产生数据写入。
 3. 完整性镜像：目标继承源 integrity 设置；integrity-on 源克隆**不重算校验和**
    （校验和随共享簇走，基准 VHDX 新增 0）。
 4. 尾部仅复制不足一簇的零头；元数据（时间戳/属性/ACL）仅描述符写入。
-物理模式写入量 = 源非零字节数（+元数据），块模式 ≈ 元数据；二者都远低于整文件重写。
+块模式写入量 ≈ 元数据；远低于整文件重写。
 
 ### 7.4 EX + SOURCE_ATOMIC 不采用理由
 
@@ -221,27 +221,24 @@ CI 基准（2GB 随机源，R: 4K ReFS VHDX，宿主写入以动态 VHDX 新增�
 ② 源侧序列化带来额外开销；③ [MS-FSCC] 2.3.9.1 wire 布局为 StructureSize 在前共 44B，
 与本地 winioctl 结构 padding 存在差异、未获实测确认，引入不确定风险。收益/风险不划算。
 
-### 7.5 克隆后使用性能适配矩阵（问题⑤）
+### 7.5 适用性与限制（问题⑤）
 
-| 使用场景 | 推荐模式 | 理由 |
-|---|---|---|
-| 只读/少改、同基多克隆（VM 模板、备份副本） | 块克隆 | 瞬时、共享簇、写入极低；读共享 LCN 无额外开销 |
-| 克隆后大量修改 | 物理复制 | 块克隆修改触发 allocate-on-write 放大 + refcount 递减；物理无共享、无 AoW、无 8175 上限 |
-| 跨卷 / 非 ReFS 目标 | 物理复制 | 块克隆仅限同 ReFS 卷 |
-| 大稀疏文件 | 两者皆可 | 块克隆空洞随 refcount 共享；物理按 4K 打洞保真 |
-| 需 integrity streams | 块克隆 | 校验和随共享簇复用，不重算；物理写入需重算校验和（额外 CPU/写入） |
-| 同区域 >8175 份克隆 | 物理复制 | 块克隆第 8176 次返回 347；物理不受引用上限约束 |
+| 场景 | 结论 |
+|---|---|
+| 只读/少改、同基多克隆（模板、备份） | 适用：瞬时、共享簇、写入极低 |
+| 克隆后大量修改 | 不适用工作副本：修改触发 allocate-on-write 放大与 refcount 递减，建议直接复制使用 |
+| 跨卷 / 非 ReFS 目标 | 不支持：块克隆仅限同 ReFS 卷 |
+| 大稀疏文件 | 支持：空洞随 refcount 共享，属性镜像 |
+| 需 integrity streams | 支持：校验和随共享簇复用，不重算 |
+| 同区域 >8175 份克隆 | 受限：第 8176 次返回 347，应换基线或减少同基克隆 |
 
-GUI 已加"物理复制"复选框：跨卷/非 ReFS 时不再误报拒绝，探测面板显示中性提示；
-日志标注模式。元数据保真：时间戳/属性经 `FileBasicInfo` 镜像；owner/group/DACL 经
-`GetSecurityInfo`/`SetSecurityInfo`，**清除 INHERITED_ACE 并以 PROTECTED_DACL 落地**
-（否则目标父目录会重推导继承 ACE 导致 ACL 漂移）；测试按"每 trustee 权利并集"比较
-有效 ACL（Windows 会合并/拆分同 trustee ACE）。均为 best-effort，失败仅警告不致命。
+GUI 仅保留块克隆路径；元数据保真：时间戳/属性经 `FileBasicInfo` 镜像；owner/group/DACL 经
+`GetSecurityInfo`/`SetSecurityInfo`，清除 INHERITED_ACE 并以 PROTECTED_DACL 落地；
+测试按"每 trustee 权利并集"比较有效 ACL。均为 best-effort，失败仅警告不致命。
 
 ### 7.6 本轮修掉的实现缺陷
 
 - 目标句柄缺 `WRITE_DAC|WRITE_OWNER` → 镜像 ACL 返回 Win32 5；已补。
 - 继承 ACE 直落导致跨目录 ACL 漂移 → 清 INHERITED + PROTECTED_DACL。
-- 块粒度零检测漏子块零尾 → 4K 零 run 打洞。
-- 范围驱动（QAR）复制漏首簇数据 → 否决，改线性扫描。
+- 物理复制模式（含 4K 零 run 打洞、QAR 驱动复制）按要求整体移除。
 - 1GB 分块下取消检查缺失 → 循环后补检查。

@@ -79,13 +79,6 @@ namespace ReFsBlockClone
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    public struct FILE_ZERO_DATA_INFORMATION
-    {
-        public long FileOffset;
-        public long BeyondFinalZero;
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct FILE_ALLOCATED_RANGE_BUFFER
     {
         public long FileOffset;
@@ -111,7 +104,6 @@ namespace ReFsBlockClone
         public const uint FSCTL_SET_INTEGRITY_INFORMATION = 0x0009C280;
         public const uint FSCTL_DUPLICATE_EXTENTS_TO_FILE = 0x00098344;
         public const uint FSCTL_SET_SPARSE = 0x000900C4;
-        public const uint FSCTL_SET_ZERO_DATA = 0x000980C8;
         public const uint FSCTL_QUERY_ALLOCATED_RANGES = 0x000940CF;
 
         public const int FileBasicInfo = 0;
@@ -354,130 +346,6 @@ namespace ReFsBlockClone
             }
         }
 
-        /// <summary>
-        /// Physical (read/write) copy strategy: no block sharing, works across
-        /// volumes and on any file system. Suited to clones that will be heavily
-        /// modified afterwards (avoids allocate-on-write amplification) or when
-        /// block cloning is unavailable. Sparse sources keep their sparse
-        /// attribute; all-zero blocks are punched as holes when supported.
-        /// </summary>
-        public void ClonePhysical(string inFile, string outFile,
-            IProgress<CloneProgress> progress = null,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            string src = NormalizePath(inFile);
-            string dst = NormalizePath(outFile);
-            if (string.Equals(src, dst, StringComparison.OrdinalIgnoreCase))
-                throw new CloneException("源文件与目标文件不能相同。");
-
-            IntPtr hIn = IntPtr.Zero;
-            IntPtr hOut = IntPtr.Zero;
-            bool created = false;
-            bool dispositionSet = false;
-            try
-            {
-                _log("打开源文件（物理复制模式）...");
-                hIn = NativeMethods.CreateFileW(src, NativeMethods.GENERIC_READ,
-                    NativeMethods.FILE_SHARE_READ, IntPtr.Zero,
-                    NativeMethods.OPEN_EXISTING, 0, IntPtr.Zero);
-                if (hIn == NativeMethods.INVALID_HANDLE_VALUE)
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法打开源文件：" + inFile);
-                ulong srcSize;
-                if (!NativeMethods.GetFileSizeEx(hIn, out srcSize))
-                    throw WinErr(Marshal.GetLastWin32Error(), "无法获取源文件大小");
-                uint attr = NativeMethods.GetFileAttributesW(src);
-                bool srcSparse = attr != 0xFFFFFFFF &&
-                    (attr & NativeMethods.FILE_ATTRIBUTE_SPARSE_FILE) != 0;
-
-                CreateDestination(dst, outFile, out hOut);
-                created = true;
-                SetDisposition(hOut, true);
-                dispositionSet = true;
-                MirrorSparse(hOut, srcSparse);
-                SetEof(hOut, srcSize);
-
-                const uint BLK = 1024 * 1024;
-                var data = new byte[BLK];
-                long done = 0;
-                uint n;
-                bool zeroOk = true;
-                while (done < (long)srcSize)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    uint want = (uint)Math.Min(BLK, (long)srcSize - done);
-                    if (!NativeMethods.ReadFile(hIn, data, want, out n, IntPtr.Zero) || n == 0)
-                        throw WinErr(Marshal.GetLastWin32Error(), "读取源文件失败");
-                    int nn = (int)n;
-                    // Split the block into 4K-granular zero / non-zero runs so
-                    // sub-block zero tails are punched too (hole-map fidelity).
-                    // Every byte is processed linearly => content always exact.
-                    int i = 0;
-                    while (i < nn)
-                    {
-                        bool z = ZeroAt(data, i, nn);
-                        int j = i;
-                        while (j < nn && ZeroAt(data, j, nn) == z) j += 4096;
-                        if (j > nn) j = nn;
-                        int runLen = j - i;
-                        bool punched = false;
-                        if (z && srcSparse && zeroOk)
-                        {
-                            var zd = new FILE_ZERO_DATA_INFORMATION
-                            {
-                                FileOffset = done + i,
-                                BeyondFinalZero = done + j
-                            };
-                            int sz = Marshal.SizeOf(typeof(FILE_ZERO_DATA_INFORMATION));
-                            IntPtr zb = Marshal.AllocHGlobal(sz);
-                            Marshal.StructureToPtr(zd, zb, false);
-                            uint dummy;
-                            punched = NativeMethods.DeviceIoControl(hOut,
-                                NativeMethods.FSCTL_SET_ZERO_DATA, zb, (uint)sz,
-                                IntPtr.Zero, 0, out dummy, IntPtr.Zero);
-                            if (!punched)
-                            {
-                                if (zeroOk)
-                                    _log("警告：FSCTL_SET_ZERO_DATA 打洞失败（Win32 " +
-                                        Marshal.GetLastWin32Error() + "），回退为写零（目标该段将占用物理空间）。");
-                                zeroOk = false;
-                            }
-                            Marshal.FreeHGlobal(zb);
-                        }
-                        if (!punched)
-                        {
-                            var run = new byte[runLen];
-                            Array.Copy(data, i, run, 0, runLen);
-                            long np;
-                            if (!NativeMethods.SetFilePointerEx(hOut, done + i, out np, NativeMethods.FILE_BEGIN))
-                                throw WinErr(Marshal.GetLastWin32Error(), "无法定位目标文件");
-                            uint w;
-                            if (!NativeMethods.WriteFile(hOut, run, (uint)runLen, out w, IntPtr.Zero) || w != runLen)
-                                throw WinErr(Marshal.GetLastWin32Error(), "写入目标文件失败");
-                        }
-                        i = j;
-                    }
-                    done += n;
-                    if (progress != null) progress.Report(new CloneProgress(done, (long)srcSize));
-                }
-                _log(string.Format("物理复制 {0} 字节完成。", srcSize));
-
-                CopyMetadata(hIn, hOut);
-                SetDisposition(hOut, false);
-                dispositionSet = false;
-                _log("克隆完成（物理复制）。");
-            }
-            catch
-            {
-                CleanupUnarmed(created, dispositionSet, ref hOut, dst);
-                throw;
-            }
-            finally
-            {
-                CloseIfValid(hIn);
-                CloseIfValid(hOut);
-            }
-        }
-
         // ---- shared pipeline steps ----
 
         private void OpenSource(string src, string display, out IntPtr hIn,
@@ -687,14 +555,6 @@ namespace ReFsBlockClone
         {
             if (h != IntPtr.Zero && h != NativeMethods.INVALID_HANDLE_VALUE)
                 NativeMethods.CloseHandle(h);
-        }
-
-        // True when the 4K unit starting at `start` (clamped to `n`) is all zero.
-        private static bool ZeroAt(byte[] b, int start, int n)
-        {
-            int end = Math.Min(start + 4096, n);
-            for (int k = start; k < end; k++) if (b[k] != 0) return false;
-            return true;
         }
 
         private static void SetDisposition(IntPtr h, bool delete)
