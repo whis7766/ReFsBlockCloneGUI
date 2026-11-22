@@ -14,7 +14,22 @@ namespace ReFsBlockClone
         public static Func<IWin32Window, string, string, MessageBoxButtons, MessageBoxIcon, DialogResult> ShowMessage =
             (owner, text, caption, buttons, icon) => MessageBox.Show(owner, text, caption, buttons, icon);
 
-        public static Func<IWin32Window, string, string, string> PickOpenFile = (owner, title, initial) =>
+        private static Func<IWin32Window, string, string, string> _pickOpen = DefaultOpen;
+        private static Func<IWin32Window, string, string, string> _pickSave = DefaultSave;
+
+        public static Func<IWin32Window, string, string, string> PickOpenFile
+        {
+            get { return _pickOpen; }
+            set { _pickOpen = value ?? DefaultOpen; }
+        }
+
+        public static Func<IWin32Window, string, string, string> PickSaveFile
+        {
+            get { return _pickSave; }
+            set { _pickSave = value ?? DefaultSave; }
+        }
+
+        private static string DefaultOpen(IWin32Window owner, string title, string initial)
         {
             using (var d = new OpenFileDialog { Title = title, CheckFileExists = true, Filter = "所有文件 (*.*)|*.*" })
             {
@@ -23,9 +38,9 @@ namespace ReFsBlockClone
                 if (!string.IsNullOrEmpty(initial) && File.Exists(initial)) d.FileName = initial;
                 return d.ShowDialog(owner) == DialogResult.OK ? d.FileName : null;
             }
-        };
+        }
 
-        public static Func<IWin32Window, string, string, string> PickSaveFile = (owner, title, initial) =>
+        private static string DefaultSave(IWin32Window owner, string title, string initial)
         {
             using (var d = new SaveFileDialog
             {
@@ -41,7 +56,7 @@ namespace ReFsBlockClone
                 if (!string.IsNullOrEmpty(initial)) d.FileName = Path.GetFileName(initial);
                 return d.ShowDialog(owner) == DialogResult.OK ? d.FileName : null;
             }
-        };
+        }
 
         private static string SafeDir(string path)
         {
