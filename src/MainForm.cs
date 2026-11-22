@@ -361,7 +361,9 @@ namespace ReFsBlockClone
             };
 
             _chkPhysical.Text = "物理复制";
-            _chkPhysical.AutoSize = true;
+            _chkPhysical.AutoSize = false;
+            _chkPhysical.Dock = DockStyle.Fill;
+            _chkPhysical.TextAlign = ContentAlignment.MiddleLeft;
             _chkPhysical.Font = new Font("Microsoft YaHei UI", 8.5F);
             _chkPhysical.ForeColor = Theme.Muted;
             _chkPhysical.BackColor = Theme.Card;
@@ -370,7 +372,7 @@ namespace ReFsBlockClone
             _chkPhysical.CheckedChanged += (s, e) => KickProbe();
 
             var cardSrc = FileCard("源文件", _txtSource, btnBrowseSource, null);
-            var cardDst = FileCard("目标文件", _txtDest, btnBrowseDest, _chkPhysical);
+            var cardDst = FileCard("目标文件", _txtDest, btnBrowseDest, null);
 
             _lblVolSrc.AutoSize = false;
             _lblVolSrc.Dock = DockStyle.Fill;
@@ -408,14 +410,17 @@ namespace ReFsBlockClone
             _lblPercent.ForeColor = Theme.Muted;
             _lblPercent.Text = "0%";
 
-            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, BackColor = Theme.Bg };
+            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, BackColor = Theme.Bg };
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112F));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138F));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104F));
-            actions.Controls.Add(_btnClone, 0, 0);
-            actions.Controls.Add(_btnCancel, 1, 0);
-            actions.Controls.Add(_lblPercent, 3, 0);
+            _chkPhysical.Margin = new Padding(2, 0, 8, 0);
+            actions.Controls.Add(_chkPhysical, 0, 0);
+            actions.Controls.Add(_btnClone, 1, 0);
+            actions.Controls.Add(_btnCancel, 2, 0);
+            actions.Controls.Add(_lblPercent, 4, 0);
 
             _txtLog.Multiline = true;
             _txtLog.ReadOnly = true;
