@@ -14,17 +14,45 @@ namespace ReFsBlockClone
         public static Func<IWin32Window, string, string, MessageBoxButtons, MessageBoxIcon, DialogResult> ShowMessage =
             (owner, text, caption, buttons, icon) => MessageBox.Show(owner, text, caption, buttons, icon);
 
-        public static Func<IWin32Window, string, string> PickOpenFile = (owner, title) =>
+        public static Func<IWin32Window, string, string, string> PickOpenFile = (owner, title, initial) =>
         {
             using (var d = new OpenFileDialog { Title = title, CheckFileExists = true, Filter = "所有文件 (*.*)|*.*" })
+            {
+                string dir = SafeDir(initial);
+                if (dir != null) d.InitialDirectory = dir;
+                if (!string.IsNullOrEmpty(initial) && File.Exists(initial)) d.FileName = initial;
                 return d.ShowDialog(owner) == DialogResult.OK ? d.FileName : null;
+            }
         };
 
-        public static Func<IWin32Window, string, string> PickSaveFile = (owner, title) =>
+        public static Func<IWin32Window, string, string, string> PickSaveFile = (owner, title, initial) =>
         {
-            using (var d = new SaveFileDialog { Title = title, OverwritePrompt = false, CheckPathExists = true, Filter = "所有文件 (*.*)|*.*" })
+            using (var d = new SaveFileDialog
+            {
+                Title = title,
+                OverwritePrompt = false,
+                CheckPathExists = true,
+                AddExtension = false,
+                Filter = "所有文件 (*.*)|*.*"
+            })
+            {
+                string dir = SafeDir(initial);
+                if (dir != null) d.InitialDirectory = dir;
+                if (!string.IsNullOrEmpty(initial)) d.FileName = Path.GetFileName(initial);
                 return d.ShowDialog(owner) == DialogResult.OK ? d.FileName : null;
+            }
         };
+
+        private static string SafeDir(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path)) return null;
+                string dir = Path.GetDirectoryName(path);
+                return !string.IsNullOrEmpty(dir) && Directory.Exists(dir) ? dir : null;
+            }
+            catch { return null; }
+        }
     }
 
     internal sealed class InlineProgress : IProgress<CloneProgress>
@@ -313,15 +341,23 @@ namespace ReFsBlockClone
             var btnBrowseSource = GhostButton("btnBrowseSource", "浏览");
             btnBrowseSource.Click += (s, e) =>
             {
-                string p = UiHooks.PickOpenFile(this, "选择源文件");
+                string p = UiHooks.PickOpenFile(this, "选择源文件", _txtSource.Text.Trim());
                 if (!string.IsNullOrEmpty(p)) _txtSource.Text = p;
             };
 
             var btnBrowseDest = GhostButton("btnBrowseDest", "另存为");
             btnBrowseDest.Click += (s, e) =>
             {
-                string p = UiHooks.PickSaveFile(this, "选择目标路径");
-                if (!string.IsNullOrEmpty(p)) { _destAuto = false; _txtDest.Text = p; }
+                string p = UiHooks.PickSaveFile(this, "选择目标路径", _txtDest.Text.Trim());
+                if (string.IsNullOrEmpty(p)) return;
+                if (File.Exists(RefsBlockCloner.NormalizePath(p)))
+                {
+                    UiHooks.ShowMessage(this, "目标文件已存在，请更换目标文件名。", "提示",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                _destAuto = false;
+                _txtDest.Text = p;
             };
 
             _chkPhysical.Text = "物理复制";
@@ -438,7 +474,7 @@ namespace ReFsBlockClone
 
         private void BrowseSource()
         {
-            string p = UiHooks.PickOpenFile(this, "选择源文件");
+            string p = UiHooks.PickOpenFile(this, "选择源文件", _txtSource.Text.Trim());
             if (!string.IsNullOrEmpty(p)) _txtSource.Text = p;
         }
 
