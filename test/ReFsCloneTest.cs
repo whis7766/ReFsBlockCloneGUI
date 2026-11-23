@@ -240,6 +240,7 @@ internal static class ReFsCloneTest
         using (var fa = File.OpenRead(a)) using (var fb = File.OpenRead(b))
         {
             var ba = new byte[1 << 16]; var bb = new byte[1 << 16];
+            long off = 0;
             while (true)
             {
                 int na = fa.Read(ba, 0, ba.Length); int nb = fb.Read(bb, 0, bb.Length);

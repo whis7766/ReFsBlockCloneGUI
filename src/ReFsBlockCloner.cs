@@ -369,9 +369,9 @@ namespace ReFsBlockClone
                 // re-assert it in case the attribute write dropped it.
                 if (srcSparse)
                 {
-                    uint dummy;
+                    uint sparseDummy;
                     if (!NativeMethods.DeviceIoControl(hOut, NativeMethods.FSCTL_SET_SPARSE,
-                            IntPtr.Zero, 0, IntPtr.Zero, 0, out dummy, IntPtr.Zero))
+                            IntPtr.Zero, 0, IntPtr.Zero, 0, out sparseDummy, IntPtr.Zero))
                         _log("警告：重新标记目标稀疏失败（Win32 " + Marshal.GetLastWin32Error() + "）。");
                 }
                 _log("克隆完成。");
