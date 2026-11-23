@@ -13,3 +13,6 @@ x64/
 
 # Local runtime log
 refsclone_headless.log
+
+# Downloaded CI artifacts
+ci*/
