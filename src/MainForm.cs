@@ -100,12 +100,6 @@ namespace ReFsBlockClone
             return p;
         }
 
-        public static void RoundControl(Control c, int radius)
-        {
-            if (c.Width <= 0 || c.Height <= 0) return;
-            using (var p = Round(new Rectangle(0, 0, c.Width, c.Height), radius))
-                c.Region = new Region(p);
-        }
     }
 
     internal sealed class Card : Panel
@@ -302,7 +296,7 @@ namespace ReFsBlockClone
             return b;
         }
 
-        private Card FileCard(string captionText, TextBox field, Button browse, Control extraTitle)
+        private Card FileCard(string captionText, TextBox field, Button browse)
         {
             var card = new Card { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 10), BackColor = Theme.Bg };
             var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = Theme.Card };
@@ -311,17 +305,10 @@ namespace ReFsBlockClone
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F));
             grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            var titleHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card, Margin = new Padding(0) };
             var cap = Caption(captionText);
-            cap.Location = new Point(0, 2);
-            titleHost.Controls.Add(cap);
-            if (extraTitle != null)
-            {
-                extraTitle.Dock = DockStyle.Right;
-                titleHost.Controls.Add(extraTitle);
-            }
-            grid.Controls.Add(titleHost, 0, 0);
-            grid.SetColumnSpan(titleHost, 2);
+            cap.Margin = new Padding(0, 2, 0, 0);
+            grid.Controls.Add(cap, 0, 0);
+            grid.SetColumnSpan(cap, 2);
 
             var host = new FieldPanel(field) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0), BackColor = Theme.Card };
             grid.Controls.Add(host, 0, 1);
@@ -374,22 +361,22 @@ namespace ReFsBlockClone
                 _txtDest.Text = p;
             };
 
-            var cardSrc = FileCard("源文件", _txtSource, btnBrowseSource, null);
-            var cardDst = FileCard("目标文件", _txtDest, btnBrowseDest, null);
+            var cardSrc = FileCard("源文件", _txtSource, btnBrowseSource);
+            var cardDst = FileCard("目标文件", _txtDest, btnBrowseDest);
 
             _lblVolSrc.AutoSize = false;
             _lblVolSrc.Dock = DockStyle.Fill;
             _lblVolSrc.TextAlign = ContentAlignment.MiddleLeft;
             _lblVolSrc.Font = new Font("Microsoft YaHei UI", 8.5F);
             _lblVolSrc.ForeColor = Theme.Muted;
-            _lblVolSrc.Text = "源文件：待探测";
+            _lblVolSrc.Text = "源文件：待选择";
 
             _lblVolDst.AutoSize = false;
             _lblVolDst.Dock = DockStyle.Fill;
             _lblVolDst.TextAlign = ContentAlignment.MiddleLeft;
             _lblVolDst.Font = new Font("Microsoft YaHei UI", 8.5F);
             _lblVolDst.ForeColor = Theme.Muted;
-            _lblVolDst.Text = "目标：待探测";
+            _lblVolDst.Text = "目标：待选择";
 
             var meta = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Theme.Bg };
             meta.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
@@ -411,7 +398,7 @@ namespace ReFsBlockClone
             _lblPercent.TextAlign = ContentAlignment.MiddleRight;
             _lblPercent.Font = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold);
             _lblPercent.ForeColor = Theme.Muted;
-            _lblPercent.Text = "0%";
+            _lblPercent.Text = "";
 
             var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, BackColor = Theme.Bg };
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138F));
@@ -477,12 +464,6 @@ namespace ReFsBlockClone
             AcceptButton = _btnClone;
         }
 
-        private void BrowseSource()
-        {
-            string p = UiHooks.PickOpenFile(this, "选择源文件", _txtSource.Text.Trim());
-            if (!string.IsNullOrEmpty(p)) _txtSource.Text = p;
-        }
-
         private void OnDragEnter(object sender, DragEventArgs e)
         {
             e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
@@ -500,7 +481,17 @@ namespace ReFsBlockClone
             try
             {
                 string src = _txtSource.Text.Trim().Trim('"');
-                if (src.Length == 0) return;
+                if (src.Length == 0)
+                {
+                    if (_destAuto)
+                    {
+                        _settingDest = true;
+                        _destAuto = false;
+                        _txtDest.Text = "";
+                        _settingDest = false;
+                    }
+                    return;
+                }
                 string dir = Path.GetDirectoryName(src);
                 string name = Path.GetFileNameWithoutExtension(src) + ".clone" + Path.GetExtension(src);
                 if (string.IsNullOrEmpty(dir)) return;
@@ -534,9 +525,24 @@ namespace ReFsBlockClone
             _srcInfo = result[0];
             _dstInfo = result[1];
 
-            if (_srcInfo == null)
+            if (src.Length == 0)
             {
-                _lblVolSrc.Text = "源文件：无法探测（路径不存在或不可访问）";
+                _lblVolSrc.Text = "源文件：待选择";
+                _lblVolSrc.ForeColor = Theme.Muted;
+            }
+            else if (_srcInfo == null)
+            {
+                _lblVolSrc.Text = "源文件：无法探测";
+                _lblVolSrc.ForeColor = Theme.Bad;
+            }
+            else if (!_srcInfo.PathExists)
+            {
+                _lblVolSrc.Text = "源文件：不存在";
+                _lblVolSrc.ForeColor = Theme.Bad;
+            }
+            else if (_srcInfo.IsDirectory)
+            {
+                _lblVolSrc.Text = "源文件：路径是目录";
                 _lblVolSrc.ForeColor = Theme.Bad;
             }
             else
@@ -547,12 +553,37 @@ namespace ReFsBlockClone
                 _lblVolSrc.ForeColor = _srcInfo.SupportsBlockClone ? Theme.Muted : Theme.Bad;
             }
 
-            if (_dstInfo == null)
+            if (dst.Length == 0)
             {
-                _lblVolDst.Text = "目标：待探测";
+                _lblVolDst.Text = "目标：待选择";
                 _lblVolDst.ForeColor = Theme.Muted;
             }
-            else if (_srcInfo != null && _dstInfo.Serial == _srcInfo.Serial && _dstInfo.SupportsBlockClone)
+            else if (_dstInfo == null)
+            {
+                _lblVolDst.Text = "目标：无法探测";
+                _lblVolDst.ForeColor = Theme.Muted;
+            }
+            else if (_dstInfo.PathExists && _dstInfo.IsDirectory)
+            {
+                _lblVolDst.Text = "目标：路径是目录";
+                _lblVolDst.ForeColor = Theme.Bad;
+            }
+            else if (_dstInfo.PathExists)
+            {
+                _lblVolDst.Text = "目标：文件已存在";
+                _lblVolDst.ForeColor = Theme.Bad;
+            }
+            else if (_srcInfo == null || !_srcInfo.PathExists || _srcInfo.IsDirectory)
+            {
+                _lblVolDst.Text = "目标：待源文件";
+                _lblVolDst.ForeColor = Theme.Muted;
+            }
+            else if (!_dstInfo.SupportsBlockClone)
+            {
+                _lblVolDst.Text = "目标：不支持块克隆";
+                _lblVolDst.ForeColor = Theme.Bad;
+            }
+            else if (_dstInfo.Serial == _srcInfo.Serial)
             {
                 _lblVolDst.Text = string.Format("目标：同卷 · {0}", _dstInfo.FileSystem);
                 _lblVolDst.ForeColor = Theme.Good;
@@ -602,38 +633,56 @@ namespace ReFsBlockClone
                 p.BytesDone / 1048576.0, p.TotalBytes / 1048576.0);
         }
 
+        private void Warn(string message, string status)
+        {
+            UiHooks.ShowMessage(this, message, "提示",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _lblPercent.Text = "";
+            _lblPercent.ForeColor = Theme.Muted;
+            _status.Text = status;
+            _status.ForeColor = Theme.Bad;
+        }
+
         internal async Task DoCloneAsync()
         {
             if (_busy) return;
+            _lblPercent.Text = "";
+            _lblPercent.ForeColor = Theme.Muted;
 
             string src = _txtSource.Text.Trim().Trim('"');
             string dst = _txtDest.Text.Trim().Trim('"');
-
-            if (string.IsNullOrEmpty(src) || !File.Exists(src))
-            {
-                UiHooks.ShowMessage(this, "请选择或输入已存在的源文件。", "提示",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            if (string.IsNullOrEmpty(dst))
-            {
-                UiHooks.ShowMessage(this, "请选择或输入目标文件路径。", "提示",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
             string fullSrc = RefsBlockCloner.NormalizePath(src);
             string fullDst = RefsBlockCloner.NormalizePath(dst);
+
+            if (fullSrc.Length == 0 || Directory.Exists(fullSrc))
+            {
+                Warn(fullSrc.Length == 0 ? "请选择或输入源文件。" : "源路径是目录，块克隆仅支持文件。",
+                    fullSrc.Length == 0 ? "源文件无效。" : "源路径是目录。");
+                return;
+            }
+            if (!File.Exists(fullSrc))
+            {
+                Warn("源文件不存在。", "源文件不存在。");
+                return;
+            }
+            if (fullDst.Length == 0)
+            {
+                Warn("请选择或输入目标文件路径。", "请选择目标。");
+                return;
+            }
+            if (Directory.Exists(fullDst))
+            {
+                Warn("目标路径是目录，请更换目标文件名。", "目标路径是目录。");
+                return;
+            }
             if (string.Equals(fullSrc, fullDst, StringComparison.OrdinalIgnoreCase))
             {
-                UiHooks.ShowMessage(this, "源文件与目标文件不能相同。", "提示",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                Warn("源文件与目标文件不能相同。", "源与目标相同。");
                 return;
             }
             if (File.Exists(fullDst))
             {
-                UiHooks.ShowMessage(this, "目标文件已存在，块克隆不会覆盖已有文件，请更换目标文件名。", "提示",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                Warn("目标文件已存在，块克隆不会覆盖已有文件，请更换目标文件名。", "目标文件已存在。");
                 return;
             }
 
@@ -658,7 +707,7 @@ namespace ReFsBlockClone
             UpdateCloneEnabled();
             _btnClone.Text = "克隆中…";
             _btnCancel.Enabled = true;
-            _lblPercent.Text = "0%";
+            _lblPercent.Text = "";
             _lblPercent.ForeColor = Theme.Accent;
             _txtLog.Clear();
             AppendLog("源文件：   " + src);

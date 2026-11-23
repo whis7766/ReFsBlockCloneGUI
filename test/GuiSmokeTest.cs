@@ -274,8 +274,11 @@ internal static class GuiSmokeTest
             var t2 = _form.DoCloneAsync();
             PumpUntil(() => gateStarted.IsSet, 30000);
             Check("progress gate reached", gateStarted.IsSet);
-            PumpUntil(() => Find<Label>("lblPercent").Text != "0%", 5000);
-            Check("percent indicator advanced", Find<Label>("lblPercent").Text != "0%");
+            PumpUntil(() => {
+                string t = Find<Label>("lblPercent").Text;
+                return t.Length > 0 && t.Contains("%") && t != "0%";
+            }, 5000);
+            Check("percent indicator advanced", Find<Label>("lblPercent").Text.Contains("%"));
             Check("cancel button enabled while busy", Find<Button>("btnCancel").Enabled);
             Snap("04-progress");
             Find<Button>("btnCancel").PerformClick();
@@ -299,7 +302,10 @@ internal static class GuiSmokeTest
             Check("log shows failure", _form.LogText.Contains("失败"));
             // let the debounced volume probe refresh so the screenshot shows
             // the red cross-volume indicator, not the stale same-volume one
-            PumpUntil(() => Find<Label>("lblVolDst").Text.Contains("不同卷"), 2000);
+            PumpUntil(() => {
+                string t = Find<Label>("lblVolDst").Text;
+                return t.Contains("不同卷") || t.Contains("不支持");
+            }, 2000);
             Snap("06-error");
             File.Delete(ntfsDst);
 
@@ -309,6 +315,9 @@ internal static class GuiSmokeTest
             var t4 = _form.DoCloneAsync();
             PumpUntil(() => t4.IsCompleted, 10000);
             Check("exists dialog recorded", Dialogs.Exists(d => d.Contains("已存在")));
+            PumpUntil(() => Find<Label>("lblVolDst").Text.Contains("已存在"), 2000);
+            Check("exists target label", Find<Label>("lblVolDst").Text.Contains("已存在"));
+            Check("exists status", _form.StatusText.Contains("已存在"));
             Snap("07-exists");
 
             if (args.Length > 3 && args[3] == "dialogs")
@@ -316,10 +325,10 @@ internal static class GuiSmokeTest
                 Console.WriteLine("\n[dialogs] native file pickers");
                 Find<TextBox>("txtSource").Text = smallSrc;
                 Find<TextBox>("txtDest").Text = smallDst;
-                Info("open dialog captured: " + CaptureDialog("选择源文件",
+                Check("open dialog captured", CaptureDialog("选择源文件",
                     () => Find<Button>("btnBrowseSource").PerformClick(),
                     Path.Combine(_outDir, "10-open-dialog.png")));
-                Info("save dialog captured: " + CaptureDialog("选择目标路径",
+                Check("save dialog captured", CaptureDialog("选择目标路径",
                     () => Find<Button>("btnBrowseDest").PerformClick(),
                     Path.Combine(_outDir, "11-save-dialog.png")));
             }

@@ -41,9 +41,21 @@ internal static class ReFsCloneTest
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetFileSizeEx(IntPtr h, out ulong sz);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ReadFile(IntPtr h, byte[] b, uint n, out uint r, IntPtr v);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    private static extern bool CreateSymbolicLinkW(string link, string target, uint flags);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileAttributesW(string name, uint attrs);
 
     private const uint GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000;
     private const uint CREATE_ALWAYS = 2, OPEN_EXISTING = 3, FILE_BEGIN = 0;
+    private const uint FILE_SHARE_READ = 0x1, FILE_SHARE_WRITE = 0x2, FILE_SHARE_DELETE = 0x4;
     private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
     private const uint FSCTL_SET_SPARSE = 0x000900C4;
     private const uint FSCTL_GET_INTEGRITY_INFORMATION = 0x0009027C;
@@ -228,7 +240,6 @@ internal static class ReFsCloneTest
         using (var fa = File.OpenRead(a)) using (var fb = File.OpenRead(b))
         {
             var ba = new byte[1 << 16]; var bb = new byte[1 << 16];
-            long off = 0;
             while (true)
             {
                 int na = fa.Read(ba, 0, ba.Length); int nb = fb.Read(bb, 0, bb.Length);
@@ -393,6 +404,7 @@ internal static class ReFsCloneTest
             LenOk(d3d, new FileInfo(d3s).Length, "dst");
             if (File.Exists(d3d)) Check("dst still SPARSE", IsSparse(d3d));
             if (File.Exists(d3d)) Check("content equal (SHA256)", Sha(d3s) == Sha(d3d));
+            if (File.Exists(d3d)) CheckMetadata(d3s, d3d);
             if (File.Exists(d3d)) CheckHoles("sparse tail-data", d3s, d3d);
             File.Delete(d3s); File.Delete(d3d);
 
@@ -433,6 +445,7 @@ internal static class ReFsCloneTest
             LenOk(d6d, new FileInfo(d6s).Length, "dst");
             if (File.Exists(d6d)) Check("dst still SPARSE", IsSparse(d6d));
             if (File.Exists(d6d)) Check("content equal (SHA256)", Sha(d6s) == Sha(d6d));
+            if (File.Exists(d6d)) CheckMetadata(d6s, d6d);
             if (File.Exists(d6d)) CheckHoles("sparse tail-hole", d6s, d6d);
             File.Delete(d6s); File.Delete(d6d);
 
@@ -502,6 +515,7 @@ internal static class ReFsCloneTest
             Check("integrity-on clone exit", ok10);
             if (File.Exists(d10d)) Check("dst integrity enabled", IntegrityEnabled(d10d));
             if (File.Exists(d10d)) Check("content equal (SHA256)", Sha(d10s) == Sha(d10d));
+            if (File.Exists(d10d)) CheckMetadata(d10s, d10d);
             File.Delete(d10s); File.Delete(d10d);
 
             string dirInt = Path.Combine(dir, "intdir");
@@ -611,6 +625,99 @@ internal static class ReFsCloneTest
                 File.Delete(d13s);
             }
 
+            // [14] sparse source reached through a symbolic link: sparse state
+            // must be derived from the opened handle, not the link's attributes.
+            Console.WriteLine("\n[14] sparse source via symbolic link");
+            var d14s = Path.Combine(dir, "d14t.src");
+            var d14l = Path.Combine(dir, "d14.link");
+            var d14d = Path.Combine(dir, "d14.dst");
+            File.Delete(d14l); File.Delete(d14s); File.Delete(d14d);
+            DoCreateSparse(d14s, m100 + 12345, new long[][] { new long[] { 0, 1 << 20 } });
+            bool linkOk = CreateSymbolicLinkW(d14l, d14s, 0);
+            if (!linkOk) linkOk = CreateSymbolicLinkW(d14l, d14s, 2);
+            if (!linkOk)
+            {
+                Info("symbolic link unavailable (Win32 " + Marshal.GetLastWin32Error() + "); case skipped");
+            }
+            else
+            {
+                string e14;
+                bool ok14 = CloneOk(d14l, d14d, out e14);
+                if (!ok14) Console.WriteLine("      ERR: " + e14);
+                Check("symlink sparse clone exit", ok14);
+                if (File.Exists(d14d)) Check("symlink sparse dst SPARSE", IsSparse(d14d));
+                if (File.Exists(d14d)) Check("symlink sparse content equal", Sha(d14s) == Sha(d14d));
+                if (File.Exists(d14d)) CheckMetadata(d14s, d14d);
+            }
+            File.Delete(d14l); File.Delete(d14s); File.Delete(d14d);
+
+            // [15] destination already exists: must be refused and left untouched.
+            Console.WriteLine("\n[15] destination exists must be preserved");
+            var d15s = Path.Combine(dir, "d15.src"); var d15d = Path.Combine(dir, "d15.dst");
+            File.Delete(d15s); File.Delete(d15d);
+            CreateDense(d15s, 1 << 20, 47);
+            CreateDense(d15d, 12345, 48);
+            string hash15 = Sha(d15d);
+            string e15;
+            bool ok15 = CloneOk(d15s, d15d, out e15);
+            Check("existing destination rejected", !ok15);
+            if (!ok15) Console.WriteLine("      message: " + e15);
+            Check("existing destination unchanged", File.Exists(d15d) && Sha(d15d) == hash15);
+            File.Delete(d15s); File.Delete(d15d);
+
+            // [16] same source and destination: refused before any I/O.
+            Console.WriteLine("\n[16] source equals destination");
+            var d16 = Path.Combine(dir, "d16.src");
+            File.Delete(d16);
+            CreateDense(d16, 1 << 20, 49);
+            string hash16 = Sha(d16);
+            string e16;
+            bool ok16 = CloneOk(d16, d16, out e16);
+            Check("same path rejected", !ok16);
+            if (!ok16) Console.WriteLine("      message: " + e16);
+            Check("same path source unchanged", File.Exists(d16) && Sha(d16) == hash16);
+            File.Delete(d16);
+
+            // [17] read-only source attribute must be mirrored (and not block cleanup).
+            Console.WriteLine("\n[17] read-only source attribute");
+            var d17s = Path.Combine(dir, "d17.src"); var d17d = Path.Combine(dir, "d17.dst");
+            File.Delete(d17s); File.Delete(d17d);
+            CreateDense(d17s, (1 << 20) + 7, 51);
+            SetFileAttributesW(d17s, 0x1); // FILE_ATTRIBUTE_READONLY
+            string e17;
+            bool ok17 = CloneOk(d17s, d17d, out e17);
+            if (!ok17) Console.WriteLine("      ERR: " + e17);
+            Check("read-only clone exit", ok17);
+            if (File.Exists(d17d)) Check("dst read-only", (GetFileAttributesW(d17d) & 0x1) != 0);
+            if (File.Exists(d17d)) Check("content equal (SHA256)", Sha(d17s) == Sha(d17d));
+            if (File.Exists(d17d)) CheckMetadata(d17s, d17d);
+            if (File.Exists(d17d)) SetFileAttributesW(d17d, 0x80); // NORMAL for delete
+            SetFileAttributesW(d17s, 0x80);
+            File.Delete(d17s); File.Delete(d17d);
+
+            // [18] alternate data streams: ReFS ADS <=128K, copied with ordinary I/O.
+            Console.WriteLine("\n[18] alternate data streams");
+            var d18s = Path.Combine(dir, "d18.src"); var d18d = Path.Combine(dir, "d18.dst");
+            File.Delete(d18s); File.Delete(d18d);
+            CreateDense(d18s, (1 << 20) + 321, 53);
+            AddStream(d18s, "meta", 1234, 54);
+            AddStream(d18s, "empty", 0, 55);
+            string e18;
+            bool ok18 = CloneOk(d18s, d18d, out e18);
+            if (!ok18) Console.WriteLine("      ERR: " + e18);
+            Check("ADS clone exit", ok18);
+            if (File.Exists(d18d))
+            {
+                Check("ADS meta exists", StreamExists(d18d, "meta"));
+                Check("ADS meta size", StreamSize(d18d, "meta") == 1234);
+                Check("ADS meta content", StreamEqual(d18s, "meta", d18d, "meta"));
+                Check("ADS empty exists", StreamExists(d18d, "empty"));
+                Check("ADS empty size", StreamSize(d18d, "empty") == 0);
+                Check("main content equal (SHA256)", Sha(d18s) == Sha(d18d));
+                CheckMetadata(d18s, d18d);
+            }
+            File.Delete(d18s); File.Delete(d18d);
+
             Console.WriteLine("\n==== RESULT: PASS=" + _pass + " FAIL=" + _fail + " ====");
             return _fail == 0 ? 0 : 1;
         }
@@ -620,6 +727,70 @@ internal static class ReFsCloneTest
             Console.WriteLine(ex.StackTrace);
             return 2;
         }
+    }
+
+    private static void AddStream(string path, string name, int size, int seed)
+    {
+        var h = CreateFileW(path + ":" + name + ":$DATA", GENERIC_READ | GENERIC_WRITE, 0,
+            IntPtr.Zero, 2 /* CREATE_ALWAYS */, 0, IntPtr.Zero);
+        if (h == new IntPtr(-1)) throw new IOException("create stream failed: " + Marshal.GetLastWin32Error());
+        try
+        {
+            if (size > 0)
+            {
+                var buf = new byte[size];
+                new Random(seed).NextBytes(buf);
+                uint w;
+                if (!WriteFile(h, buf, (uint)buf.Length, out w, IntPtr.Zero) || w != buf.Length)
+                    throw new IOException("write stream failed: " + Marshal.GetLastWin32Error());
+            }
+        }
+        finally { CloseHandle(h); }
+    }
+
+    private static IntPtr OpenStream(string path, string name)
+    {
+        return CreateFileW(path + ":" + name + ":$DATA", GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+    }
+
+    private static bool StreamExists(string path, string name)
+    {
+        var h = OpenStream(path, name);
+        if (h == new IntPtr(-1)) return false;
+        CloseHandle(h);
+        return true;
+    }
+
+    private static long StreamSize(string path, string name)
+    {
+        var h = OpenStream(path, name);
+        if (h == new IntPtr(-1)) return -1;
+        ulong sz;
+        bool ok = GetFileSizeEx(h, out sz);
+        CloseHandle(h);
+        return ok ? (long)sz : -1;
+    }
+
+    private static bool StreamEqual(string a, string nameA, string b, string nameB)
+    {
+        var ha = OpenStream(a, nameA);
+        var hb = OpenStream(b, nameB);
+        if (ha == new IntPtr(-1) || hb == new IntPtr(-1)) { if (ha != new IntPtr(-1)) CloseHandle(ha); if (hb != new IntPtr(-1)) CloseHandle(hb); return false; }
+        try
+        {
+            var ba = new byte[1 << 16]; var bb = new byte[1 << 16];
+            while (true)
+            {
+                uint na, nb;
+                bool oka = ReadFile(ha, ba, (uint)ba.Length, out na, IntPtr.Zero);
+                bool okb = ReadFile(hb, bb, (uint)bb.Length, out nb, IntPtr.Zero);
+                if (!oka || !okb || na != nb) return false;
+                if (na == 0) return true;
+                for (int i = 0; i < (int)na; i++) if (ba[i] != bb[i]) return false;
+            }
+        }
+        finally { CloseHandle(ha); CloseHandle(hb); }
     }
 
     // Raw FSCTL_DUPLICATE_EXTENTS_TO_FILE with the OLD round-up strategy,

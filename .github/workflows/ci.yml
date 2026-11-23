@@ -54,6 +54,7 @@ jobs:
             $dst = "R:\bench\dst.bin"
             $before = (Get-Item $vhdx).Length
             $out = & test\x64\Release\ReFsCloneTest.exe bench $src $dst $mb
+            if ($LASTEXITCODE -ne 0) { Write-Host $out; exit 1 }
             $after = (Get-Item $vhdx).Length
             $lines += "$out vhdx_growth_bytes=$($after - $before)"
             Remove-Item $dst -Force
@@ -68,6 +69,7 @@ jobs:
           $f2 = [IO.File]::Open($src2, 'Open', 'ReadWrite', 'Read'); $f2.Flush($true); $f2.Close()
           $before = (Get-Item $vhdx).Length
           $out = & test\x64\Release\ReFsCloneTest.exe bench $src2 "R:\bench\dst_int.bin" 1024
+          if ($LASTEXITCODE -ne 0) { Write-Host $out; exit 1 }
           $after = (Get-Item $vhdx).Length
           $lines += "$out integrity=on vhdx_growth_bytes=$($after - $before)"
           Remove-Item "R:\bench\dst_int.bin" -Force

@@ -10,8 +10,9 @@
 //     call, same ReFS volume, identical Integrity Streams settings, sparse
 //     source => sparse target, destination region within EOF (SetEndOfFile
 //     first), max 8175 references per physical region (error 347).
-//   * Sparse attribute, integrity streams, timestamps/attributes and the
-//     owner/group/DACL security descriptor are MIRRORED from the source.
+//   * Sparse attribute, integrity streams, timestamps/attributes, named
+//     alternate data streams (ordinary I/O) and the owner/group/DACL security
+//     descriptor are MIRRORED from the source.
 //   * Delete-pending is a process-level cleanup aid armed immediately after
 //     CREATE_NEW (not a clone prerequisite, not crash-persistent); a
 //     DeleteFileW fallback covers the window before it is armed.
@@ -85,6 +86,14 @@ namespace ReFsBlockClone
         public long Length;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct WIN32_FIND_STREAM_DATA
+    {
+        public long StreamSize;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260 + 36)]
+        public string StreamName;
+    }
+
     internal static class NativeMethods
     {
         public const uint GENERIC_READ = 0x80000000;
@@ -93,6 +102,8 @@ namespace ReFsBlockClone
         public const uint WRITE_DAC = 0x00040000;
         public const uint WRITE_OWNER = 0x00080000;
         public const uint FILE_SHARE_READ = 0x00000001;
+        public const uint FILE_SHARE_WRITE = 0x00000002;
+        public const uint FILE_SHARE_DELETE = 0x00000004;
         public const uint OPEN_EXISTING = 3;
         public const uint CREATE_NEW = 1;
         public const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
@@ -186,6 +197,17 @@ namespace ReFsBlockClone
             IntPtr hFile, byte[] lpBuffer, uint nNumberOfBytesToWrite,
             out uint lpNumberOfBytesWritten, IntPtr lpOverlapped);
 
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr FindFirstStreamW(string lpFileName, uint dwInfoLevel,
+            ref WIN32_FIND_STREAM_DATA lpFindStreamData, uint dwFlags);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern bool FindNextStreamW(IntPtr hFindStream,
+            ref WIN32_FIND_STREAM_DATA lpFindStreamData);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool FindClose(IntPtr hFindStream);
+
         [DllImport("advapi32.dll", SetLastError = true)]
         public static extern uint GetSecurityInfo(
             IntPtr handle, uint ObjectType, uint SecurityInfo,
@@ -224,6 +246,8 @@ namespace ReFsBlockClone
         public bool IntegrityEnabled;
         public bool ChecksumEnforcementOff;
         public bool IsSparse;
+        public bool PathExists;
+        public bool IsDirectory;
     }
 
     /// <summary>
@@ -260,8 +284,17 @@ namespace ReFsBlockClone
         {
             string src = NormalizePath(inFile);
             string dst = NormalizePath(outFile);
+            if (src.Length == 0) throw new CloneException("源文件路径为空。");
+            if (dst.Length == 0) throw new CloneException("目标文件路径为空。");
             if (string.Equals(src, dst, StringComparison.OrdinalIgnoreCase))
                 throw new CloneException("源文件与目标文件不能相同。");
+            if (System.IO.Directory.Exists(src))
+                throw new CloneException("源路径是目录，块克隆仅支持文件：" + inFile);
+            if (System.IO.Directory.Exists(dst))
+                throw new CloneException("目标路径是目录，请更换目标文件名：" + outFile);
+            List<AlternateStream> altStreams = System.IO.File.Exists(src)
+                ? EnumerateAlternateStreams(src)
+                : new List<AlternateStream>();
             ulong chunk = chunkBytes == 0 ? DefaultChunkBytes : chunkBytes;
             if (chunk >= 4UL * 1024 * 1024 * 1024)
                 throw new CloneException("分块大小必须小于 4GB（ReFS 单次克隆上限）。");
@@ -328,9 +361,19 @@ namespace ReFsBlockClone
                 cancellationToken.ThrowIfCancellationRequested();
                 if (progress != null) progress.Report(new CloneProgress((long)srcSize, (long)srcSize));
 
-                CopyMetadata(hIn, hOut);
                 SetDisposition(hOut, false);
                 dispositionSet = false;
+                CopyAlternateStreams(src, dst, altStreams, cancellationToken);
+                CopyMetadata(hIn, hOut);
+                // FileBasicInfo cannot carry the sparse flag (it is FSCTL-only);
+                // re-assert it in case the attribute write dropped it.
+                if (srcSparse)
+                {
+                    uint dummy;
+                    if (!NativeMethods.DeviceIoControl(hOut, NativeMethods.FSCTL_SET_SPARSE,
+                            IntPtr.Zero, 0, IntPtr.Zero, 0, out dummy, IntPtr.Zero))
+                        _log("警告：重新标记目标稀疏失败（Win32 " + Marshal.GetLastWin32Error() + "）。");
+                }
                 _log("克隆完成。");
             }
             catch
@@ -369,7 +412,8 @@ namespace ReFsBlockClone
 
             if (!NativeMethods.GetFileSizeEx(hIn, out srcSize))
                 throw WinErr(Marshal.GetLastWin32Error(), "无法获取源文件大小");
-            uint attr = NativeMethods.GetFileAttributesW(src);
+            uint attr = AttributesOfHandle(hIn);
+            if (attr == 0xFFFFFFFF) attr = NativeMethods.GetFileAttributesW(src);
             srcSparse = attr != 0xFFFFFFFF && (attr & NativeMethods.FILE_ATTRIBUTE_SPARSE_FILE) != 0;
 
             gi = new FSCTL_GET_INTEGRITY_INFORMATION_BUFFER();
@@ -396,7 +440,8 @@ namespace ReFsBlockClone
             hOut = NativeMethods.CreateFileW(dst,
                 NativeMethods.GENERIC_READ | NativeMethods.GENERIC_WRITE | NativeMethods.DELETE |
                 NativeMethods.WRITE_DAC | NativeMethods.WRITE_OWNER,
-                0, IntPtr.Zero, NativeMethods.CREATE_NEW, 0, IntPtr.Zero);
+                NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE | NativeMethods.FILE_SHARE_DELETE,
+                IntPtr.Zero, NativeMethods.CREATE_NEW, 0, IntPtr.Zero);
             if (hOut == NativeMethods.INVALID_HANDLE_VALUE)
                 throw WinErr(Marshal.GetLastWin32Error(), "无法创建目标文件：" + display);
         }
@@ -443,7 +488,7 @@ namespace ReFsBlockClone
             if (!ok)
             {
                 if (required) throw WinErr(err, "无法设置目标文件完整性信息");
-                _log("警告：镜像完整性设置失败（Win32 " + err + "），物理复制不受影响。");
+                _log("警告：镜像完整性设置失败（Win32 " + err + "），不影响数据克隆。");
                 return;
             }
             _log(gi.ChecksumAlgorithm != 0
@@ -464,8 +509,10 @@ namespace ReFsBlockClone
             {
                 uint want = (uint)Math.Min((ulong)tmp.Length, tail - got);
                 uint n;
-                if (!NativeMethods.ReadFile(hIn, tmp, want, out n, IntPtr.Zero) || n == 0)
+                if (!NativeMethods.ReadFile(hIn, tmp, want, out n, IntPtr.Zero))
                     throw WinErr(Marshal.GetLastWin32Error(), "无法读取源文件尾部");
+                if (n == 0)
+                    throw new CloneException("源文件在克隆期间被截断，无法读取尾部。");
                 Array.Copy(tmp, 0, data, (int)got, (int)n);
                 got += n;
             }
@@ -497,6 +544,14 @@ namespace ReFsBlockClone
             {
                 if (NativeMethods.GetFileInformationByHandleEx(hIn, NativeMethods.FileBasicInfo, b, (uint)sz))
                 {
+                    var info = (FILE_BASIC_INFO)Marshal.PtrToStructure(b, typeof(FILE_BASIC_INFO));
+                    const uint SETTABLE = 0x00000001u | 0x00000002u | 0x00000004u | 0x00000020u |
+                                          0x00000080u | 0x00000100u | 0x00001000u | 0x00002000u;
+                    uint attrs = info.FileAttributes & SETTABLE;
+                    if ((attrs & 0x00000080u) != 0 && (attrs & ~0x00000080u) != 0)
+                        attrs &= ~0x00000080u;
+                    info.FileAttributes = attrs;
+                    Marshal.StructureToPtr(info, b, false);
                     if (!NativeMethods.SetFileInformationByHandle(hOut, NativeMethods.FileBasicInfo, b, (uint)sz))
                         _log("警告：镜像时间戳/属性失败（Win32 " + Marshal.GetLastWin32Error() + "）。");
                 }
@@ -616,7 +671,10 @@ namespace ReFsBlockClone
                     uint returned;
                     if (!NativeMethods.DeviceIoControl(h, NativeMethods.FSCTL_QUERY_ALLOCATED_RANGES,
                             inBuf, 16, outBuf, OUT_CAP, out returned, IntPtr.Zero))
+                    {
+                        if (Marshal.GetLastWin32Error() == 38) break; // ERROR_HANDLE_EOF
                         return false;
+                    }
                     if (returned == 0) break;
                     int count = (int)(returned / 16);
                     for (int i = 0; i < count; i++)
@@ -653,24 +711,35 @@ namespace ReFsBlockClone
             try
             {
                 string p = NormalizePath(path);
+                bool pathExists = false;
                 bool isDir = false;
                 uint attr = NativeMethods.GetFileAttributesW(p);
                 string target = p;
                 if (attr == 0xFFFFFFFF)
                 {
                     target = System.IO.Path.GetDirectoryName(p);
-                    if (string.IsNullOrEmpty(target)) return false;
+                    if (string.IsNullOrEmpty(target)) target = ".";
                     isDir = true;
                 }
-                else if ((attr & 0x10) != 0) isDir = true; // FILE_ATTRIBUTE_DIRECTORY
+                else
+                {
+                    pathExists = true;
+                    isDir = (attr & 0x10) != 0; // FILE_ATTRIBUTE_DIRECTORY
+                }
 
                 h = NativeMethods.CreateFileW(target, NativeMethods.GENERIC_READ,
-                    NativeMethods.FILE_SHARE_READ | 0x2 | 0x4, IntPtr.Zero,
-                    NativeMethods.OPEN_EXISTING,
+                    NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE | NativeMethods.FILE_SHARE_DELETE,
+                    IntPtr.Zero, NativeMethods.OPEN_EXISTING,
                     isDir ? NativeMethods.FILE_FLAG_BACKUP_SEMANTICS : 0, IntPtr.Zero);
+                if (h == NativeMethods.INVALID_HANDLE_VALUE && !isDir)
+                    h = NativeMethods.CreateFileW(target, NativeMethods.GENERIC_READ,
+                        NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE | NativeMethods.FILE_SHARE_DELETE,
+                        IntPtr.Zero, NativeMethods.OPEN_EXISTING,
+                        NativeMethods.FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
                 if (h == NativeMethods.INVALID_HANDLE_VALUE) return false;
 
                 var vi = new VolumeInfo();
+                vi.PathExists = pathExists;
                 var sb = new System.Text.StringBuilder(64);
                 uint serial, flags;
                 if (!NativeMethods.GetVolumeInformationByHandleW(h, IntPtr.Zero, 0,
@@ -694,10 +763,18 @@ namespace ReFsBlockClone
                 }
                 Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
 
-                if (!isDir)
+                uint hattr = AttributesOfHandle(h);
+                if (pathExists && hattr != 0xFFFFFFFF)
                 {
-                    uint fa = NativeMethods.GetFileAttributesW(p);
-                    vi.IsSparse = fa != 0xFFFFFFFF && (fa & NativeMethods.FILE_ATTRIBUTE_SPARSE_FILE) != 0;
+                    isDir = (hattr & 0x10) != 0;
+                    vi.IsDirectory = isDir;
+                    vi.IsSparse = !isDir && (hattr & NativeMethods.FILE_ATTRIBUTE_SPARSE_FILE) != 0;
+                }
+                else if (pathExists)
+                {
+                    vi.IsDirectory = isDir;
+                    vi.IsSparse = !isDir && attr != 0xFFFFFFFF &&
+                        (attr & NativeMethods.FILE_ATTRIBUTE_SPARSE_FILE) != 0;
                 }
                 info = vi;
                 return true;
@@ -708,6 +785,121 @@ namespace ReFsBlockClone
                 if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
                 CloseIfValid(h);
             }
+        }
+
+        private static uint AttributesOfHandle(IntPtr h)
+        {
+            int sz = Marshal.SizeOf(typeof(FILE_BASIC_INFO));
+            IntPtr b = Marshal.AllocHGlobal(sz);
+            try
+            {
+                if (!NativeMethods.GetFileInformationByHandleEx(h, NativeMethods.FileBasicInfo, b, (uint)sz))
+                    return 0xFFFFFFFF;
+                var info = (FILE_BASIC_INFO)Marshal.PtrToStructure(b, typeof(FILE_BASIC_INFO));
+                return info.FileAttributes;
+            }
+            catch { return 0xFFFFFFFF; }
+            finally { Marshal.FreeHGlobal(b); }
+        }
+
+        private sealed class AlternateStream
+        {
+            public readonly string Name;
+            public AlternateStream(string name) { Name = name; }
+        }
+
+        private List<AlternateStream> EnumerateAlternateStreams(string src)
+        {
+            var list = new List<AlternateStream>();
+            var data = new WIN32_FIND_STREAM_DATA();
+            IntPtr h = NativeMethods.FindFirstStreamW(src, 0, ref data, 0);
+            if (h == NativeMethods.INVALID_HANDLE_VALUE)
+            {
+                int err = Marshal.GetLastWin32Error();
+                if (err != 38 && err != 1)
+                    _log("警告：无法枚举备用数据流（Win32 " + err + "），源含 ADS 时不会被复制。");
+                return list;
+            }
+            try
+            {
+                do
+                {
+                    string name = data.StreamName;
+                    if (string.IsNullOrEmpty(name)) continue;
+                    if (!name.StartsWith(":", StringComparison.Ordinal)) name = ":" + name;
+                    if (string.Equals(name, "::$DATA", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(name, ":$DATA", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    list.Add(new AlternateStream(name));
+                }
+                while (NativeMethods.FindNextStreamW(h, ref data));
+            }
+            finally { NativeMethods.FindClose(h); }
+            if (list.Count > 0) _log("发现备用数据流 " + list.Count + " 个。");
+            return list;
+        }
+
+        private void CopyAlternateStreams(string src, string dst,
+            List<AlternateStream> streams, CancellationToken cancellationToken)
+        {
+            if (streams == null || streams.Count == 0) return;
+            int copied = 0;
+            long bytes = 0;
+            foreach (var stream in streams)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                IntPtr hi = IntPtr.Zero;
+                IntPtr ho = IntPtr.Zero;
+                try
+                {
+                    string srcStream = src + stream.Name;
+                    string dstStream = dst + stream.Name;
+                    hi = NativeMethods.CreateFileW(srcStream, NativeMethods.GENERIC_READ,
+                        NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE | NativeMethods.FILE_SHARE_DELETE,
+                        IntPtr.Zero, NativeMethods.OPEN_EXISTING, 0, IntPtr.Zero);
+                    if (hi == NativeMethods.INVALID_HANDLE_VALUE)
+                        throw WinErr(Marshal.GetLastWin32Error(), "无法打开源备用数据流：" + stream.Name);
+                    ho = NativeMethods.CreateFileW(dstStream,
+                        NativeMethods.GENERIC_READ | NativeMethods.GENERIC_WRITE,
+                        NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE | NativeMethods.FILE_SHARE_DELETE,
+                        IntPtr.Zero, NativeMethods.CREATE_NEW, 0, IntPtr.Zero);
+                    if (ho == NativeMethods.INVALID_HANDLE_VALUE)
+                        throw WinErr(Marshal.GetLastWin32Error(), "无法创建目标备用数据流：" + stream.Name);
+
+                    ulong size;
+                    if (!NativeMethods.GetFileSizeEx(hi, out size))
+                        throw WinErr(Marshal.GetLastWin32Error(), "无法获取备用数据流大小：" + stream.Name);
+                    long np;
+                    if (!NativeMethods.SetFilePointerEx(hi, 0, out np, NativeMethods.FILE_BEGIN) ||
+                        !NativeMethods.SetFilePointerEx(ho, 0, out np, NativeMethods.FILE_BEGIN))
+                        throw WinErr(Marshal.GetLastWin32Error(), "无法定位备用数据流：" + stream.Name);
+
+                    var buf = new byte[64 * 1024];
+                    ulong done = 0;
+                    while (done < size)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        uint want = (uint)Math.Min((ulong)buf.Length, size - done);
+                        uint n;
+                        if (!NativeMethods.ReadFile(hi, buf, want, out n, IntPtr.Zero))
+                            throw WinErr(Marshal.GetLastWin32Error(), "无法读取源备用数据流：" + stream.Name);
+                        if (n == 0)
+                            throw new CloneException("源备用数据流在克隆期间被截断：" + stream.Name);
+                        uint w;
+                        if (!NativeMethods.WriteFile(ho, buf, n, out w, IntPtr.Zero) || w != n)
+                            throw WinErr(Marshal.GetLastWin32Error(), "无法写入目标备用数据流：" + stream.Name);
+                        done += n;
+                    }
+                    copied++;
+                    bytes += (long)size;
+                }
+                finally
+                {
+                    CloseIfValid(hi);
+                    CloseIfValid(ho);
+                }
+            }
+            _log(string.Format("已复制备用数据流 {0} 个（{1} 字节，普通 I/O）。", copied, bytes));
         }
 
         /// <summary>Accept quoted paths, forward slashes, and &gt;259-char paths.</summary>
@@ -766,7 +958,7 @@ namespace ReFsBlockClone
                 case 50: return "常见原因：卷不是 ReFS 或 ReFS 版本过旧；源与目标 Integrity Streams 设置不一致；源稀疏而目标不稀疏；克隆区间超出源文件末尾。";
                 case 87: return "常见原因：偏移/长度未按簇边界对齐；源与目标不在同一卷。";
                 case 112: return "卷剩余空间不足。";
-                case 347: return "物理块引用数已达 ReFS 上限（8175）。请先对部分既有克隆做普通物理复制以降低共享度，再重试。";
+                case 347: return "物理块引用数已达 ReFS 上限（8175）。请更换基线文件或减少同一源文件的克隆数量。";
                 default: return null;
             }
         }

@@ -90,7 +90,7 @@ README 改写为准确语义。
 
 ### 2.7 缺失的硬约束文档
 
-补齐：单次 <4GB（100MB 分块）、8175 引用上限（347 友好提示）、簇对齐、
+补齐：单次 <4GB（当前 1GB 分块，早期为 100MB）、8175 引用上限（347 友好提示）、簇对齐、
 目标先 SetEndOfFile、同文件不重叠、oplock 打断、24H2/Server 2025 原生复制背景。
 
 ### 2.8 "实测 8.2GB 约 0.6 秒"
@@ -128,17 +128,18 @@ README 改写为准确语义。
 ### 4.1 引擎流程（src/ReFsBlockCloner.cs）
 
 打开源 → 卷能力/序列号 → 大小/稀疏/完整性 → `CREATE_NEW` 目标 → **立即**
-delete-pending → 目标卷校验 → 镜像稀疏 → 镜像完整性（空文件时）→
+delete-pending → 目标卷校验 → 镜像稀疏 → 镜像完整性 →
 `SetEndOfFile(源大小)` → 对齐前缀分块 FSCTL（**默认 1GB**，可取消、报进度）→
-尾部普通读写（稀疏空洞跳过）→ 镜像时间戳/属性/owner/group/DACL → 清除 delete-pending。
-失败路径：句柄关闭触发删除；未armed 窗口 `DeleteFileW` 兜底。
+尾部普通读写（稀疏空洞跳过）→ 清除 delete-pending → 备用数据流（ADS）普通 I/O 复制 →
+镜像时间戳/可设置属性/owner/group/DACL。
+失败路径：句柄关闭触发删除；未armed 窗口或 ADS 阶段失败时 `DeleteFileW` 兜底。
 错误统一附 Win32 码 + 系统文本 + ReFS 中文提示（5/19/32/33/50/87/112/347）。
 路径规范化支持引号、正斜杠与 `\\?\` 长路径。
 
 ### 4.2 GUI（src/MainForm.cs）
 
 分组式布局：源/目标（浏览+拖放+目标自动建议）、卷信息面板（文件系统、簇大小、
-完整性、稀疏、同卷校验，300ms 防抖异步探测）、操作行（开始/取消/进度条/百分比）、
+完整性、稀疏、同卷校验，300ms 防抖异步探测）、操作行（开始/取消/百分比）、
 等宽日志、Panel+Label 状态栏（可被 DrawToBitmap 完整渲染）。
 DPI PerMonitorV2 + longPathAware manifest。
 **可测试性**：`UiHooks.ShowMessage` 对话框钩子；`MainForm.ProgressOverride`
@@ -146,10 +147,11 @@ DPI PerMonitorV2 + longPathAware manifest。
 
 ### 4.3 测试与 CI
 
-- `ReFsCloneTest`：13 组矩阵（见 README），含 round-up 诊断与引用上限实测。
+- `ReFsCloneTest`：矩阵（见 README），含 round-up 诊断、引用上限、稀疏符号链接、目标已存在、只读属性与 ADS 实测。
 - `GuiSmokeTest`：驱动真实 MainForm 走真实克隆管线，`DrawToBitmap` 渲染
-  初始/填充/进度/成功/取消/错误/目标已存在/最小尺寸 8 态 PNG（session 0 可用，
-  不依赖交互桌面），并断言文件存在性、SHA256、对话框记录、状态文本。
+  初始/填充/进度/成功/取消/错误/目标已存在/最小尺寸 8 态 PNG，另经 PrintWindow
+  抓取原生打开/另存为对话框 2 张（共 10 张，session 0 可用，不依赖交互桌面），
+  并断言文件存在性、SHA256、对话框记录、状态文本。
 - `ci.yml`：push/PR/dispatch → MSBuild → 双 ReFS VHD（4K/64K）→ 引擎矩阵
   （C 盘剩余 >12GB 时 full，含 8.2GB 与引用上限）→ headless CLI → GUI 截图 →
   上传产物。`build-release.yml` 移除"删除全部运行记录"步骤，发布前跑 quick 验证。
@@ -160,7 +162,7 @@ DPI PerMonitorV2 + longPathAware manifest。
 - delete-pending 不跨 OS 崩溃持久化；崩溃后可能留半成品（NTFS/ReFS 皆然）。
 - 同卷判定用卷序列号代理（理论上可碰撞）；FSCTL 自身亦会拒绝跨卷。
 - GUI 截图为整窗渲染（含标题栏与状态栏），用于布局与状态验证；
-  对话框经钩子记录，不在截图中呈现。
+  原生打开/另存为对话框另经 PrintWindow 抓取并纳入产物。
 
 ## 6. 候选后续（状态见 §7）
 
@@ -242,3 +244,27 @@ GUI 仅保留块克隆路径；元数据保真：时间戳/属性经 `FileBasicI
 - 继承 ACE 直落导致跨目录 ACL 漂移 → 清 INHERITED + PROTECTED_DACL。
 - 物理复制模式（含 4K 零 run 打洞、QAR 驱动复制）按要求整体移除。
 - 1GB 分块下取消检查缺失 → 循环后补检查。
+
+## 8. 第三轮一致性审计（本次）
+
+对引擎、GUI、CLI、测试、CI 与文档做全量对照，修复以下核心/一致性问题：
+
+- **稀疏/完整性文件的元数据镜像会整段失败**：`FILE_BASIC_INFO.FileAttributes` 若含
+  `FILE_ATTRIBUTE_SPARSE_FILE`（0x200）或 `FILE_ATTRIBUTE_INTEGRITY_STREAM`（0x8000），
+  `SetFileInformationByHandle(FileBasicInfo)` 不接受这些由 FSCTL 管理的属性，导致同一次调用里的
+  时间戳/可设置属性也一起未落地。现按可设置位掩码（READONLY/HIDDEN/SYSTEM/ARCHIVE/NORMAL/
+  TEMPORARY/OFFLINE/NOT_CONTENT_INDEXED）镜像，稀疏与完整性仍由 FSCTL 负责。
+- **ADS 被静默丢弃**：`FSCTL_DUPLICATE_EXTENTS_TO_FILE` 只作用于默认数据流。现用
+  `FindFirstStreamW/FindNextStreamW` 枚举、在主数据克隆成功并清除 delete-pending 后，以普通 I/O
+  复制每个命名流（ReFS 单流 ≤128KB）；失败仍删除整个目标，不留半成品。
+- **稀疏判断看路径不看句柄**：符号链接指向稀疏文件时，`GetFileAttributesW(link)` 不带
+  `SPARSE_FILE`，目标未标稀疏会令 FSCTL 拒绝。现从已打开句柄的 `FileBasicInfo` 取属性；
+  `TryProbe` 同样以句柄属性判定稀疏/目录，并新增 `PathExists/IsDirectory`。
+- **目标已存在/目录时 UI 仍显示“同卷”**：卷探测新增路径存在性与目录标记，GUI 分别显示
+  “文件已存在”“路径是目录”，并在校验失败时给出状态栏原因；源不存在显示“不存在”，
+  源为空显示“待选择”，初始不再显示 0%。
+- **空路径/目录源/目录目标错误信息不明确**：引擎入口显式拒绝并给出中文原因；尾部读取遇
+  EOF 报“源文件被截断”而非 Win32 0。
+- **CI 基准失败不使作业失败**：bench 两次调用均检查 `$LASTEXITCODE`；GUI 对话框抓取改为断言。
+- **文档口径**：README 的“100MB 分块”改为 1GB（当前默认）；DESIGN 移除已删除的进度条描述，
+  并更新截图/对话框说明。
