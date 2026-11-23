@@ -1,0 +1,4 @@
+BENCH chunkMB=100 ms=20 vhdx_growth_bytes=0
+BENCH chunkMB=1024 ms=19 vhdx_growth_bytes=0
+BENCH chunkMB=3072 ms=20 vhdx_growth_bytes=0
+BENCH chunkMB=1024 ms=22 integrity=on vhdx_growth_bytes=0

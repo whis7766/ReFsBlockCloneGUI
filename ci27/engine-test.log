@@ -1,0 +1,280 @@
+== ReFS block-clone engine verification on R:\ + S:\ (quick=False) ==
+
+[1] dense non-aligned 100MB+12345
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 104869945 字节：块克隆前缀 104869888 字节 + 普通复制尾部 57 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 104869888/104869945 字节
+      | 尾部 57 字节已普通复制。
+      | 克隆完成。
+  [PASS] clone exit
+  [PASS] dst size
+  [PASS] content equal (SHA256)
+  [PASS] dense source => dst NOT sparse
+  [PASS] last-write time mirrored
+  [PASS] creation time mirrored
+  [PASS] owner mirrored
+  [PASS] group mirrored
+  [PASS] effective DACL mirrored
+
+[2] dense 8.231GB+12345 (full scale)
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 8630841401 字节：块克隆前缀 8630841344 字节 + 普通复制尾部 57 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 1073741824/8630841401 字节
+      |   已块克隆 2147483648/8630841401 字节
+      |   已块克隆 3221225472/8630841401 字节
+      |   已块克隆 4294967296/8630841401 字节
+      |   已块克隆 5368709120/8630841401 字节
+      |   已块克隆 6442450944/8630841401 字节
+      |   已块克隆 7516192768/8630841401 字节
+      |   已块克隆 8589934592/8630841401 字节
+      |   已块克隆 8630841344/8630841401 字节
+      | 尾部 57 字节已普通复制。
+      | 克隆完成。
+  [PASS] clone exit (3.789s)
+  [PASS] dst size
+  [PASS] content equal (sampled)
+
+[3] sparse 100MB+12345, tail partial has data
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 104869945 字节：块克隆前缀 104869888 字节 + 普通复制尾部 57 字节
+      | 创建目标文件...
+      | 源为稀疏文件，目标已标记稀疏。
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 104869888/104869945 字节
+      | 尾部 57 字节已普通复制。
+      | 克隆完成。
+  [PASS] clone exit
+  [PASS] dst size
+  [PASS] dst still SPARSE
+  [PASS] content equal (SHA256)
+  [PASS] last-write time mirrored
+  [PASS] creation time mirrored
+  [PASS] owner mirrored
+  [PASS] group mirrored
+  [PASS] effective DACL mirrored
+  [PASS] sparse tail-data hole map identical
+
+[4] zero-byte
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 0 字节：块克隆前缀 0 字节 + 普通复制尾部 0 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（关闭）。
+      | 克隆完成。
+  [PASS] clone exit
+  [PASS] dst size
+
+[5] cross-volume (ReFS -> NTFS) must fail cleanly
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 1048576 字节：块克隆前缀 1048576 字节 + 普通复制尾部 0 字节
+      | 创建目标文件...
+  [PASS] clone rejected (exit false)
+      message: CloneException: 目标卷不支持块克隆，目标须与源位于同一 ReFS 卷。
+  [PASS] no orphan on NTFS
+
+[6] sparse 100MB+12345, tail is a hole
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 104869945 字节：块克隆前缀 104869888 字节 + 普通复制尾部 57 字节
+      | 创建目标文件...
+      | 源为稀疏文件，目标已标记稀疏。
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 104869888/104869945 字节
+      | 尾部为空洞，保持稀疏，不写入。
+      | 克隆完成。
+  [PASS] clone exit
+  [PASS] dst size
+  [PASS] dst still SPARSE
+  [PASS] content equal (SHA256)
+  [PASS] last-write time mirrored
+  [PASS] creation time mirrored
+  [PASS] owner mirrored
+  [PASS] group mirrored
+  [PASS] effective DACL mirrored
+  [PASS] sparse tail-hole hole map identical
+
+[7] sub-cluster dense 1000 bytes
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 1000 字节：块克隆前缀 0 字节 + 普通复制尾部 1000 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（关闭）。
+      | 尾部 1000 字节已普通复制。
+      | 克隆完成。
+  [PASS] clone exit
+  [PASS] content equal (SHA256)
+
+[8] 64K-cluster volume S:\
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0xE070E4CA）
+      | 簇大小 65536 字节，源大小 1049353 字节：块克隆前缀 1048576 字节 + 普通复制尾部 777 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 1048576/1049353 字节
+      | 尾部 777 字节已普通复制。
+      | 克隆完成。
+  [PASS] 64K dense clone exit
+  [PASS] 64K dense content equal
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0xE070E4CA）
+      | 簇大小 65536 字节，源大小 1049353 字节：块克隆前缀 1048576 字节 + 普通复制尾部 777 字节
+      | 创建目标文件...
+      | 源为稀疏文件，目标已标记稀疏。
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 1048576/1049353 字节
+      | 尾部为空洞，保持稀疏，不写入。
+      | 克隆完成。
+  [PASS] 64K sparse clone exit
+  [PASS] 64K sparse content equal
+  [PASS] 64K sparse dst SPARSE
+  [PASS] 64K sparse hole map identical
+
+[9] cross-ReFS-volume (R:\ -> S:\) must fail cleanly
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 1048576 字节：块克隆前缀 1048576 字节 + 普通复制尾部 0 字节
+      | 创建目标文件...
+  [PASS] clone rejected
+      message: CloneException: 源与目标必须位于同一 ReFS 卷（卷序列号不匹配）。
+  [PASS] no orphan on second ReFS volume
+
+[10] integrity streams matching
+  [PASS] source integrity enabled
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 1049131 字节：块克隆前缀 1048576 字节 + 普通复制尾部 555 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（启用）。
+      |   已块克隆 1048576/1049131 字节
+      | 尾部 555 字节已普通复制。
+      | 克隆完成。
+  [PASS] integrity-on clone exit
+  [PASS] dst integrity enabled
+  [PASS] content equal (SHA256)
+  [PASS] last-write time mirrored
+  [PASS] creation time mirrored
+  [PASS] owner mirrored
+  [PASS] group mirrored
+  [PASS] effective DACL mirrored
+  [PASS] source inherited integrity
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 1048909 字节：块克隆前缀 1048576 字节 + 普通复制尾部 333 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（启用）。
+      |   已块克隆 1048576/1048909 字节
+      | 尾部 333 字节已普通复制。
+      | 克隆完成。
+  [PASS] inherited-integrity clone exit
+  [PASS] dst integrity ENABLED to match inherited source
+  [PASS] content equal (SHA256)
+  [PASS] source integrity off
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 1048798 字节：块克隆前缀 1048576 字节 + 普通复制尾部 222 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 1048576/1048798 字节
+      | 尾部 222 字节已普通复制。
+      | 克隆完成。
+  [PASS] off-source into on-dir clone exit
+  [PASS] dst integrity DISABLED to match source
+  [PASS] content equal (SHA256)
+
+[11] cancellation cleanup
+  [PASS] OperationCanceledException raised
+  [PASS] no orphan after cancel
+
+[12] diagnostic: raw round-up FSCTL on non-aligned source
+  [INFO] raw round-up FSCTL result: Win32 0 (succeeded)
+
+[13] reference-count cap (expect ERROR_BLOCK_TOO_MANY_REFERENCES 347)
+  [INFO] successful clones before refusal: 8175 in 2.0s; refusal code 347
+  [PASS] refusal is ERROR_BLOCK_TOO_MANY_REFERENCES (347)
+  [PASS] refusal count within documented cap window [8170,8176]
+  [PASS] no orphan after refusal
+
+[14] sparse source via symbolic link
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 104869945 字节：块克隆前缀 104869888 字节 + 普通复制尾部 57 字节
+      | 创建目标文件...
+      | 源为稀疏文件，目标已标记稀疏。
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 104869888/104869945 字节
+      | 尾部为空洞，保持稀疏，不写入。
+      | 克隆完成。
+  [PASS] symlink sparse clone exit
+  [PASS] symlink sparse dst SPARSE
+  [PASS] symlink sparse content equal
+  [PASS] last-write time mirrored
+  [PASS] creation time mirrored
+  [PASS] owner mirrored
+  [PASS] group mirrored
+  [PASS] effective DACL mirrored
+
+[15] destination exists must be preserved
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 1048576 字节：块克隆前缀 1048576 字节 + 普通复制尾部 0 字节
+      | 创建目标文件...
+  [PASS] existing destination rejected
+      message: Win32ExceptionEx: 无法创建目标文件：R:\reftest\d15.dst（Win32 80 / 0x50：The file exists）
+  [PASS] existing destination unchanged
+
+[16] source equals destination
+  [PASS] same path rejected
+      message: CloneException: 源文件与目标文件不能相同。
+  [PASS] same path source unchanged
+
+[17] read-only source attribute
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 1048583 字节：块克隆前缀 1048576 字节 + 普通复制尾部 7 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 1048576/1048583 字节
+      | 尾部 7 字节已普通复制。
+      | 克隆完成。
+  [PASS] read-only clone exit
+  [PASS] dst read-only
+  [PASS] content equal (SHA256)
+  [PASS] last-write time mirrored
+  [PASS] creation time mirrored
+  [PASS] owner mirrored
+  [PASS] group mirrored
+  [PASS] effective DACL mirrored
+
+[18] alternate data streams
+      | 发现备用数据流 2 个。
+      | 打开源文件...
+      | 源卷支持块克隆（卷序列号 0x846E27AE）
+      | 簇大小 4096 字节，源大小 1048897 字节：块克隆前缀 1048576 字节 + 普通复制尾部 321 字节
+      | 创建目标文件...
+      | 已复制源完整性 streams 设置（关闭）。
+      |   已块克隆 1048576/1048897 字节
+      | 尾部 321 字节已普通复制。
+      | 已复制备用数据流 2 个（1234 字节，普通 I/O）。
+      | 克隆完成。
+  [PASS] ADS clone exit
+  [PASS] ADS meta exists
+  [PASS] ADS meta size
+  [PASS] ADS meta content
+  [PASS] ADS empty exists
+  [PASS] ADS empty size
+  [PASS] main content equal (SHA256)
+  [PASS] last-write time mirrored
+  [PASS] creation time mirrored
+  [PASS] owner mirrored
+  [PASS] group mirrored
+  [PASS] effective DACL mirrored
+
+==== RESULT: PASS=100 FAIL=0 ====

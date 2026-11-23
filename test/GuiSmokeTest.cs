@@ -318,6 +318,7 @@ internal static class GuiSmokeTest
             PumpUntil(() => Find<Label>("lblVolDst").Text.Contains("已存在"), 2000);
             Check("exists target label", Find<Label>("lblVolDst").Text.Contains("已存在"));
             Check("exists status", _form.StatusText.Contains("已存在"));
+            Check("exists log reflects current validation", _form.LogText.Contains("校验未通过"));
             Snap("07-exists");
 
             if (args.Length > 3 && args[3] == "dialogs")

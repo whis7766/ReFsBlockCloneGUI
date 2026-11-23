@@ -355,6 +355,9 @@ namespace ReFsBlockClone
                 {
                     UiHooks.ShowMessage(this, "目标文件已存在，请更换目标文件名。", "提示",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    _status.Text = "目标文件已存在。";
+                    _status.ForeColor = Theme.Bad;
+                    _lblPercent.Text = "";
                     return;
                 }
                 _destAuto = false;
@@ -637,6 +640,8 @@ namespace ReFsBlockClone
         {
             UiHooks.ShowMessage(this, message, "提示",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _txtLog.Clear();
+            AppendLog("校验未通过：" + status);
             _lblPercent.Text = "";
             _lblPercent.ForeColor = Theme.Muted;
             _status.Text = status;
