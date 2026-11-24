@@ -248,6 +248,7 @@ internal static class GuiSmokeTest
             Check("no modal dialog on success", Dialogs.Count == 0);
             Check("status shows completion", _form.StatusText.Contains("完成"));
             Check("log shows completion", _form.LogText.Contains("克隆完成"));
+            Check("success log has no ACL warning", !_form.LogText.Contains("镜像安全描述符失败"));
             Snap("03-success");
 
             // ---- mid-clone progress, then cancel ----

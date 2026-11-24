@@ -273,3 +273,11 @@ GUI 仅保留块克隆路径；元数据保真：时间戳/属性经 `FileBasicI
 - **CI 基准失败不使作业失败**：bench 两次调用均检查 `$LASTEXITCODE`；GUI 对话框抓取改为断言。
 - **文档口径**：README 的“100MB 分块”改为 1GB（当前默认）；DESIGN 移除已删除的进度条描述，
   并更新截图/对话框说明。
+
+### 9. 2.1.1 生产日志与 ACL 修复
+
+- 引擎不再逐块输出“已块克隆 x/y”，进度只经 `IProgress` 到 GUI 百分比；CLI 日志保持简洁。
+- 安全描述符镜像拆成两次 `SetSecurityInfo`：先单独设置受保护 DACL，再单独尝试 owner/group。
+  原先合并调用在非提升进程缺少 `SeRestorePrivilege`/`SeTakeOwnership` 时返回 Win32 5，
+  会连同 DACL 一起丢弃并打出“警告”。拆分后 DACL 独立落地，owner/group 失败静默跳过，
+  数据克隆成功路径不再出现该警告。

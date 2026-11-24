@@ -349,7 +349,6 @@ namespace ReFsBlockClone
                         throw WinErr(err, string.Format("块克隆失败：偏移 {0}", offset));
                     }
                     offset += bc;
-                    _log(string.Format("  已块克隆 {0}/{1} 字节", offset, srcSize));
                     if (progress != null) progress.Report(new CloneProgress((long)offset, (long)srcSize));
                 }
                 Marshal.FreeHGlobal(buf); buf = IntPtr.Zero;
@@ -533,8 +532,9 @@ namespace ReFsBlockClone
 
         /// <summary>
         /// Mirror timestamps, attributes and owner/group/DACL. Best-effort:
-        /// failures are logged as warnings and never fail an otherwise
-        /// successful data clone (setting owner/SACL may need privileges).
+        /// DACL and owner/group are applied separately so a missing
+        /// SeRestorePrivilege/SeTakeOwnership does not also discard the DACL.
+        /// Privilege failures are skipped silently; data cloning always wins.
         /// </summary>
         private void CopyMetadata(IntPtr hIn, IntPtr hOut)
         {
@@ -560,9 +560,12 @@ namespace ReFsBlockClone
 
             IntPtr sd = IntPtr.Zero, owner = IntPtr.Zero, group = IntPtr.Zero, dacl = IntPtr.Zero;
             const uint SE_FILE_OBJECT = 1;
-            const uint OWNER_GROUP_DACL = 1 | 2 | 4;
+            const uint OWNER_INFO = 0x00000001;
+            const uint GROUP_INFO = 0x00000002;
+            const uint DACL_INFO = 0x00000004;
             const uint PROTECTED_DACL = 0x80000000;
-            uint rc = NativeMethods.GetSecurityInfo(hIn, SE_FILE_OBJECT, OWNER_GROUP_DACL,
+            uint rc = NativeMethods.GetSecurityInfo(hIn, SE_FILE_OBJECT,
+                OWNER_INFO | GROUP_INFO | DACL_INFO,
                 out owner, out group, out dacl, IntPtr.Zero, out sd);
             if (rc == 0)
             {
@@ -582,16 +585,19 @@ namespace ReFsBlockClone
                         if (aceSize <= 0) break;
                         pos += aceSize;
                     }
+                    // Protect the DACL on its own; owner/group are a separate
+                    // access check and may legitimately fail for non-elevated users.
+                    NativeMethods.SetSecurityInfo(hOut, SE_FILE_OBJECT,
+                        DACL_INFO | PROTECTED_DACL, IntPtr.Zero, IntPtr.Zero, dacl, IntPtr.Zero);
                 }
-                uint rc2 = NativeMethods.SetSecurityInfo(hOut, SE_FILE_OBJECT,
-                    OWNER_GROUP_DACL | PROTECTED_DACL, owner, group, dacl, IntPtr.Zero);
-                if (rc2 != 0)
-                    _log("警告：镜像安全描述符失败（Win32 " + rc2 + "）。");
+                uint ogMask = (owner != IntPtr.Zero ? OWNER_INFO : 0) |
+                              (group != IntPtr.Zero ? GROUP_INFO : 0);
+                if (ogMask != 0)
+                {
+                    NativeMethods.SetSecurityInfo(hOut, SE_FILE_OBJECT,
+                        ogMask, owner, group, IntPtr.Zero, IntPtr.Zero);
+                }
                 NativeMethods.LocalFree(sd);
-            }
-            else
-            {
-                _log("警告：读取源安全描述符失败（Win32 " + rc + "）。");
             }
         }
 
