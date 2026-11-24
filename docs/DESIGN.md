@@ -142,8 +142,9 @@ delete-pending → 目标卷校验 → 镜像稀疏 → 镜像完整性 →
 完整性、稀疏、同卷校验，300ms 防抖异步探测）、操作行（开始/取消/百分比）、
 等宽日志、Panel+Label 状态栏（可被 DrawToBitmap 完整渲染）。
 DPI PerMonitorV2 + longPathAware manifest。
-**可测试性**：`UiHooks.ShowMessage` 对话框钩子；`MainForm.ProgressOverride`
+**可测试性（仅 DEBUG）**：`UiHooks.ShowMessage` 对话框钩子；`MainForm.ProgressOverride`
 （worker 线程同步回调，可确定性暂停克隆以截取进度态）；`InternalsVisibleTo`。
+生产 Release 以 `#if DEBUG` 排除上述测试接缝，`DebugType=none`，不产出 PDB。
 
 ### 4.3 测试与 CI
 
@@ -152,9 +153,10 @@ DPI PerMonitorV2 + longPathAware manifest。
   初始/填充/进度/成功/取消/错误/目标已存在/最小尺寸 8 态 PNG，另经 PrintWindow
   抓取原生打开/另存为对话框 2 张（共 10 张，session 0 可用，不依赖交互桌面），
   并断言文件存在性、SHA256、对话框记录、状态文本。
-- `ci.yml`：push/PR/dispatch → MSBuild → 双 ReFS VHD（4K/64K）→ 引擎矩阵
-  （C 盘剩余 >12GB 时 full，含 8.2GB 与引用上限）→ headless CLI → GUI 截图 →
-  上传产物。`build-release.yml` 移除"删除全部运行记录"步骤，发布前跑 quick 验证。
+- `ci.yml`：push/PR/dispatch → Release x64（生产，无测试钩子/PDB）+ Debug x64（仅 GUI 冒烟）
+  → 双 ReFS VHD（4K/64K）→ 引擎矩阵（C 盘剩余 >12GB 时 full，含 8.2GB 与引用上限）
+  → headless CLI → GUI 截图 → 上传产物。`build-release.yml` 发布前跑 quick 验证，
+  资产仅 exe 与 exe.config。
 
 ## 5. 已知限制
 

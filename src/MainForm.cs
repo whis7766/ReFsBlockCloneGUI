@@ -11,6 +11,7 @@ namespace ReFsBlockClone
 {
     internal static class UiHooks
     {
+#if DEBUG
         public static Func<IWin32Window, string, string, MessageBoxButtons, MessageBoxIcon, DialogResult> ShowMessage =
             (owner, text, caption, buttons, icon) => MessageBox.Show(owner, text, caption, buttons, icon);
 
@@ -28,6 +29,23 @@ namespace ReFsBlockClone
             get { return _pickSave; }
             set { _pickSave = value ?? DefaultSave; }
         }
+#else
+        public static DialogResult ShowMessage(IWin32Window owner, string text, string caption,
+            MessageBoxButtons buttons, MessageBoxIcon icon)
+        {
+            return MessageBox.Show(owner, text, caption, buttons, icon);
+        }
+
+        public static string PickOpenFile(IWin32Window owner, string title, string initial)
+        {
+            return DefaultOpen(owner, title, initial);
+        }
+
+        public static string PickSaveFile(IWin32Window owner, string title, string initial)
+        {
+            return DefaultSave(owner, title, initial);
+        }
+#endif
 
         private static string DefaultOpen(IWin32Window owner, string title, string initial)
         {
@@ -220,10 +238,12 @@ namespace ReFsBlockClone
         private bool _settingDest;
         private CancellationTokenSource _cts;
 
+#if DEBUG
         internal static Action<CloneProgress> ProgressOverride;
 
         internal string LogText { get { return _txtLog.Text; } }
         internal string StatusText { get { return _status.Text; } }
+#endif
 
         public MainForm()
         {
@@ -648,7 +668,11 @@ namespace ReFsBlockClone
             _status.ForeColor = Theme.Bad;
         }
 
+#if DEBUG
         internal async Task DoCloneAsync()
+#else
+        private async Task DoCloneAsync()
+#endif
         {
             if (_busy) return;
             _lblPercent.Text = "";
@@ -722,9 +746,13 @@ namespace ReFsBlockClone
             _cts = new CancellationTokenSource();
             var progress = new InlineProgress(p =>
             {
+#if DEBUG
                 var ov = ProgressOverride;
                 if (ov != null) ov(p);
                 else ApplyProgress(p);
+#else
+                ApplyProgress(p);
+#endif
             });
             var sw = Stopwatch.StartNew();
             try

@@ -19,7 +19,7 @@ jobs:
         uses: microsoft/setup-msbuild@v2
         with:
           msbuild-architecture: x64
-      - name: Build Release x64
+      - name: Build Release x64 production
         run: msbuild ReFsBlockCloneGUI.sln /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /m /v:m
       - name: Prepare ReFS test volume
         run: powershell -ExecutionPolicy Bypass -File scripts\New-ReFsTestVolumes.ps1
@@ -35,3 +35,7 @@ jobs:
             src/x64/Release/ReFsBlockCloneGUI.exe
             src/x64/Release/ReFsBlockCloneGUI.exe.config
           generate_release_notes: true
+          body: |
+            生产版：Release x64，DebugType=none，不生成/不附带 PDB。
+            生产程序不含 GUI 测试钩子与 InternalsVisibleTo。
+            发布资产仅包含 exe 与 exe.config。

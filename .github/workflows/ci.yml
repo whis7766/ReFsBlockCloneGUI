@@ -23,8 +23,11 @@ jobs:
         with:
           msbuild-architecture: x64
 
-      - name: Build Release x64
+      - name: Build Release x64 (production, no test hooks/PDB)
         run: msbuild ReFsBlockCloneGUI.sln /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /m /v:m
+
+      - name: Build Debug x64 for GUI smoke test only
+        run: msbuild test\GuiSmokeTest.csproj /p:Configuration=Debug /p:Platform=x64 /p:PreferredToolArchitecture=x64 /m /v:m
 
       - name: Prepare real ReFS test volumes (4K + 64K clusters)
         run: powershell -ExecutionPolicy Bypass -File scripts\New-ReFsTestVolumes.ps1
@@ -110,7 +113,7 @@ jobs:
       - name: GUI smoke test with state screenshots
         run: |
           New-Item -ItemType Directory -Force -Path gui-shots | Out-Null
-          & test\x64\Release\GuiSmokeTest.exe R gui-shots C dialogs *>&1 | Tee-Object -FilePath gui-test.log
+          & test\x64\Debug\GuiSmokeTest.exe R gui-shots C dialogs *>&1 | Tee-Object -FilePath gui-test.log
           $code = $LASTEXITCODE
           Write-Host "gui exit code: $code"
           exit $code
@@ -129,5 +132,5 @@ jobs:
             src/x64/Release/ReFsBlockCloneGUI.exe
             src/x64/Release/ReFsBlockCloneGUI.exe.config
             test/x64/Release/ReFsCloneTest.exe
-            test/x64/Release/GuiSmokeTest.exe
+            test/x64/Debug/GuiSmokeTest.exe
           if-no-files-found: warn

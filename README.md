@@ -67,11 +67,13 @@ reference/
 msbuild ReFsBlockCloneGUI.sln /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /m
 ```
 
-产物：`src\x64\Release\ReFsBlockCloneGUI.exe`、`test\x64\Release\ReFsCloneTest.exe`、`test\x64\Release\GuiSmokeTest.exe`。
+产物：`src\x64\Release\ReFsBlockCloneGUI.exe`（生产版，无 PDB/测试钩子）、
+`test\x64\Release\ReFsCloneTest.exe`、`test\x64\Debug\GuiSmokeTest.exe`（测试版，含 DEBUG 钩子）。
 
 **所有编译、运行、调试、测试都在 GitHub Actions 的 Windows runner 上完成**（`.github/workflows/ci.yml`，push / PR / 手动触发）：
 
-1. MSBuild 编译 Release x64；
+1. MSBuild 编译 Release x64 生产程序（`DebugType=none`，不生成 PDB）与 Release 引擎测试；
+   另以 Debug x64 编译 GUI 冒烟测试（测试钩子只在 DEBUG 构建中存在）；
 2. 在动态 VHDX 上制备两个真实 ReFS 卷（R: 4KB 簇、S: 64KB 簇）；
 3. 引擎矩阵：非对齐稠密/稀疏、稀疏尾洞、零字节、亚簇小文件、跨卷（ReFS→NTFS、ReFS→ReFS）拒绝、完整性开启/目录继承、取消清理、8175 引用上限、8.2GB 全尺度（磁盘空间足够时）、元数据/ACL 保真、ADS 复制、稀疏符号链接、只读属性；
 4. 分块/写入量基准：100/1024/3072MB 分块克隆 2GB 源，以动态 VHDX 新增长度代理宿主写入；另测 integrity-on 源；
@@ -79,7 +81,8 @@ msbuild ReFsBlockCloneGUI.sln /p:Configuration=Release /p:Platform=x64 /p:Prefer
 6. GUI 冒烟测试：真实克隆的初始/填充/进度/成功/取消/错误/目标已存在/最小尺寸状态截图（PNG 产物），并抓取原生打开/另存为对话框；
 7. 上传日志、截图、基准与二进制产物。
 
-发布：手动触发 `Build and Release` 并填写 tag（发布前跑 quick 引擎验证）。
+发布：手动触发 `Build and Release` 并填写 tag（发布前跑 quick 引擎验证）；
+Release 资产只含 `ReFsBlockCloneGUI.exe` 与 `ReFsBlockCloneGUI.exe.config`，不含测试程序、日志、截图或 PDB。
 
 ## 使用
 

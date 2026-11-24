@@ -26,7 +26,8 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
-    <DebugType>pdbonly</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>none</DebugType>
     <Optimize>true</Optimize>
     <OutputPath>x64\Release\</OutputPath>
     <DefineConstants>TRACE</DefineConstants>
