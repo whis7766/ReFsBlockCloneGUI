@@ -34,7 +34,7 @@ Windows 上对 **同一 ReFS 卷内** 的文件做块级克隆（Block Clone）�
 ```
 src/
   ReFsBlockCloner.cs   核心引擎：全部 Win32 调用与唯一克隆逻辑（GUI/CLI/测试共享）
-  MainForm.cs          WinForms 界面（卷信息、进度、取消、拖放、日志）
+  MainForm.cs          原生 WinForms 界面（GroupBox/Button/TextBox/StatusStrip，DPI 自适应）
   Program.cs           入口：单实例互斥体 + GUI / 无头 CLI 分支
 test/
   ReFsCloneTest.cs     引擎验证矩阵（真实 ReFS 卷，4K 与 64K 簇）

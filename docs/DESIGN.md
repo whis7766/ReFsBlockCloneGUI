@@ -141,7 +141,7 @@ delete-pending → 目标卷校验 → 镜像稀疏 → 镜像完整性 →
 分组式布局：源/目标（浏览+拖放+目标自动建议）、卷信息面板（文件系统、簇大小、
 完整性、稀疏、同卷校验，300ms 防抖异步探测）、操作行（开始/取消/百分比）、
 等宽日志、Panel+Label 状态栏（可被 DrawToBitmap 完整渲染）。
-DPI PerMonitorV2 + longPathAware manifest。
+DPI PerMonitorV2 + longPathAware manifest，`AutoScaleMode=Dpi`（96 DPI 基准），界面全部为原生控件。
 **可测试性（仅 DEBUG）**：`UiHooks.ShowMessage` 对话框钩子；`MainForm.ProgressOverride`
 （worker 线程同步回调，可确定性暂停克隆以截取进度态）；`InternalsVisibleTo`。
 生产 Release 以 `#if DEBUG` 排除上述测试接缝，`DebugType=none`，不产出 PDB。
@@ -281,3 +281,11 @@ GUI 仅保留块克隆路径；元数据保真：时间戳/属性经 `FileBasicI
   原先合并调用在非提升进程缺少 `SeRestorePrivilege`/`SeTakeOwnership` 时返回 Win32 5，
   会连同 DACL 一起丢弃并打出“警告”。拆分后 DACL 独立落地，owner/group 失败静默跳过，
   数据克隆成功路径不再出现该警告。
+
+### 10. 2.1.2 原生控件界面
+
+- 移除自绘 `Card` / `FieldPanel` / `RoundButton`：`UserPaint` 只填充圆角路径内部，四角留给父窗口，
+  子控件窗口不接收父绘制，角落透出黑色。改为原生 `GroupBox` + `Button` + `TextBox` + `StatusStrip`。
+- 高 DPI：`AutoScaleMode=Dpi`、`AutoScaleDimensions=(96,96)`；布局全部走 `TableLayoutPanel`
+  的 AutoSize 行与百分比列，不用固定像素行高；按钮 AutoSize，尺寸随字体度量变化。
+  配合 app.config 的 PerMonitorV2 与 manifest，跨显示器拖动时由 WinForms 重新缩放。

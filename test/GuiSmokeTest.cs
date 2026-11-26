@@ -193,6 +193,9 @@ internal static class GuiSmokeTest
             Snap("01-initial");
             Check("initial: clone button disabled", !Find<Button>("btnClone").Enabled);
             Check("initial: cancel button disabled", !Find<Button>("btnCancel").Enabled);
+            Check("native status bar present", Find<StatusStrip>("statusStrip") != null);
+            Check("dpi autoscale enabled", _form.AutoScaleMode == AutoScaleMode.Dpi);
+            Check("native group boxes used", _form.Controls.Find("txtSource", true)[0].Parent.Parent is GroupBox);
 
             // ---- filled state + volume probe + auto suggestion ----
             string smallSrc = Path.Combine(dir, "small.src");

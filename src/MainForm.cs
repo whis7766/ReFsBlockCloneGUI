@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -97,123 +96,14 @@ namespace ReFsBlockClone
 
     internal static class Theme
     {
-        public static readonly Color Bg = Color.FromArgb(246, 247, 249);
-        public static readonly Color Card = Color.White;
-        public static readonly Color Border = Color.FromArgb(229, 231, 235);
-        public static readonly Color Text = Color.FromArgb(17, 24, 39);
-        public static readonly Color Muted = Color.FromArgb(107, 114, 128);
-        public static readonly Color Accent = Color.FromArgb(37, 99, 235);
-        public static readonly Color Good = Color.FromArgb(22, 163, 74);
-        public static readonly Color Bad = Color.FromArgb(220, 38, 38);
-
-        public static GraphicsPath Round(Rectangle r, int radius)
-        {
-            var p = new GraphicsPath();
-            int d = radius * 2;
-            p.AddArc(r.X, r.Y, d, d, 180, 90);
-            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
-            p.CloseFigure();
-            return p;
-        }
-
-    }
-
-    internal sealed class Card : Panel
-    {
-        public Card()
-        {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
-                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-            BackColor = Theme.Bg;
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            var r = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (var path = Theme.Round(r, 10))
-            using (var fill = new SolidBrush(Theme.Card))
-                e.Graphics.FillPath(fill, path);
-            using (var path = Theme.Round(r, 10))
-            using (var pen = new Pen(Theme.Border))
-                e.Graphics.DrawPath(pen, path);
-        }
-    }
-
-    internal sealed class FieldPanel : Panel
-    {
-        public readonly TextBox Field;
-
-        public FieldPanel(TextBox field)
-        {
-            Field = field;
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
-                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-            BackColor = Theme.Bg;
-            field.BorderStyle = BorderStyle.None;
-            field.BackColor = Color.FromArgb(243, 244, 246);
-            field.ForeColor = Theme.Text;
-            field.Font = new Font("Microsoft YaHei UI", 10F);
-            field.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
-            Controls.Add(field);
-            Resize += (s, e) => LayoutField();
-            LayoutField();
-        }
-
-        private void LayoutField()
-        {
-            Field.Left = 12;
-            Field.Width = Math.Max(10, Width - 24);
-            Field.Top = Math.Max(4, (Height - Field.Height) / 2);
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), 8))
-            using (var fill = new SolidBrush(Color.FromArgb(243, 244, 246)))
-                e.Graphics.FillPath(fill, path);
-        }
-    }
-
-    internal sealed class RoundButton : Button
-    {
-        public Color FillColor = Theme.Accent;
-        public Color HoverColor = Color.FromArgb(29, 78, 216);
-        public Color BorderColor = Color.Transparent;
-        public int Radius = 7;
-        private bool _hover;
-
-        public RoundButton()
-        {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
-                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-            FlatStyle = FlatStyle.Flat;
-            UseVisualStyleBackColor = false;
-            Cursor = Cursors.Hand;
-            MouseEnter += (s, e) => { _hover = true; Invalidate(); };
-            MouseLeave += (s, e) => { _hover = false; Invalidate(); };
-            EnabledChanged += (s, e) => Invalidate();
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            Color fill = !Enabled ? Color.FromArgb(229, 231, 235)
-                        : _hover ? HoverColor : FillColor;
-            using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), Radius))
-            using (var brush = new SolidBrush(fill))
-                e.Graphics.FillPath(brush, path);
-            if (BorderColor != Color.Transparent && Enabled)
-                using (var path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), Radius))
-                using (var pen = new Pen(BorderColor))
-                    e.Graphics.DrawPath(pen, path);
-            Color text = !Enabled ? Color.FromArgb(156, 163, 175) : ForeColor;
-            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, text,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-        }
+        public static readonly Color Bg = SystemColors.Control;
+        public static readonly Color Card = SystemColors.Window;
+        public static readonly Color Border = SystemColors.ControlDark;
+        public static readonly Color Text = SystemColors.ControlText;
+        public static readonly Color Muted = SystemColors.GrayText;
+        public static readonly Color Accent = SystemColors.HotTrack;
+        public static readonly Color Good = Color.FromArgb(0, 128, 0);
+        public static readonly Color Bad = Color.FromArgb(180, 30, 30);
     }
 
     public sealed class MainForm : Form
@@ -228,7 +118,8 @@ namespace ReFsBlockClone
         private Label _lblVolSrc = new Label { Name = "lblVolSrc" };
         private Label _lblVolDst = new Label { Name = "lblVolDst" };
         private TextBox _txtLog = new TextBox { Name = "txtLog" };
-        private Label _status = new Label { Name = "statusLabel" };
+        private StatusStrip _statusBar = new StatusStrip { Name = "statusStrip", SizingGrip = false };
+        private ToolStripStatusLabel _status = new ToolStripStatusLabel { Name = "statusLabel" };
 
         private readonly System.Windows.Forms.Timer _probeTimer = new System.Windows.Forms.Timer { Interval = 300 };
         private int _probeSeq;
@@ -264,94 +155,114 @@ namespace ReFsBlockClone
             catch { return null; }
         }
 
-        private Label Caption(string text)
-        {
-            return new Label
-            {
-                Text = text,
-                AutoSize = true,
-                Font = new Font("Microsoft YaHei UI", 8.5F),
-                ForeColor = Theme.Muted,
-                Margin = new Padding(0, 0, 0, 0)
-            };
-        }
-
         private void StyleField(TextBox t)
         {
             t.Margin = new Padding(0);
+            t.Font = new Font("Microsoft YaHei UI", 10F);
+            t.BorderStyle = BorderStyle.FixedSingle;
+            t.BackColor = SystemColors.Window;
+            t.ForeColor = SystemColors.WindowText;
         }
 
-        private Button GhostButton(string name, string text)
+        private Button BrowseButton(string name, string text)
         {
-            var b = new RoundButton
+            var b = new Button
             {
                 Name = name,
                 Text = text,
-                Dock = DockStyle.Fill,
-                BackColor = Theme.Card,
-                Font = new Font("Microsoft YaHei UI", 9F),
-                FillColor = Color.White,
-                HoverColor = Color.FromArgb(249, 250, 251),
-                BorderColor = Color.FromArgb(224, 227, 232),
-                ForeColor = Color.FromArgb(55, 65, 81),
-                Margin = new Padding(0, 7, 0, 7)
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(78, 0),
+                Padding = new Padding(8, 2, 8, 2),
+                Margin = new Padding(8, 1, 0, 1),
+                UseVisualStyleBackColor = true
             };
             return b;
         }
 
-        private Button PrimaryButton(string name, string text)
+        private Button ActionButton(string name, string text, int minWidth)
         {
-            var b = new RoundButton
+            var b = new Button
             {
                 Name = name,
                 Text = text,
-                Dock = DockStyle.Fill,
-                BackColor = Theme.Bg,
-                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold),
-                FillColor = Theme.Accent,
-                HoverColor = Color.FromArgb(29, 78, 216),
-                ForeColor = Color.White,
-                Margin = new Padding(0, 6, 0, 6)
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(minWidth, 0),
+                Padding = new Padding(12, 4, 12, 4),
+                Margin = new Padding(0, 0, 8, 0),
+                UseVisualStyleBackColor = true,
+                Font = new Font("Microsoft YaHei UI", 9F)
             };
             return b;
         }
 
-        private Card FileCard(string captionText, TextBox field, Button browse)
+        private GroupBox FileGroup(string caption, TextBox field, Button browse)
         {
-            var card = new Card { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 10), BackColor = Theme.Bg };
-            var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = Theme.Card };
+            var grid = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2,
+                RowCount = 1,
+                Margin = new Padding(0)
+            };
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
-            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F));
-            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            field.Dock = DockStyle.Fill;
+            grid.Controls.Add(field, 0, 0);
+            grid.Controls.Add(browse, 1, 0);
 
-            var cap = Caption(captionText);
-            cap.Margin = new Padding(0, 2, 0, 0);
-            grid.Controls.Add(cap, 0, 0);
-            grid.SetColumnSpan(cap, 2);
+            var box = new GroupBox
+            {
+                Text = caption,
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(10, 6, 10, 10)
+            };
+            box.Controls.Add(grid);
+            return box;
+        }
 
-            var host = new FieldPanel(field) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 8, 0), BackColor = Theme.Card };
-            grid.Controls.Add(host, 0, 1);
-            grid.Controls.Add(browse, 1, 1);
-            card.Controls.Add(grid);
-            return card;
+        private GroupBox LogGroup(TextBox log)
+        {
+            log.Multiline = true;
+            log.ReadOnly = true;
+            log.ScrollBars = ScrollBars.Vertical;
+            log.Dock = DockStyle.Fill;
+            log.BorderStyle = BorderStyle.None;
+            log.Font = new Font("Consolas", 9F);
+            log.BackColor = SystemColors.Window;
+            log.ForeColor = SystemColors.WindowText;
+            log.Margin = new Padding(0);
+
+            var box = new GroupBox
+            {
+                Text = "日志",
+                Dock = DockStyle.Fill,
+                Padding = new Padding(10, 6, 10, 10)
+            };
+            box.Controls.Add(log);
+            return box;
         }
 
         private void BuildUi()
         {
             Text = "";
-            ClientSize = new Size(832, 584);
-            MinimumSize = new Size(736, 508);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            ClientSize = new Size(820, 560);
+            MinimumSize = new Size(720, 480);
             StartPosition = FormStartPosition.CenterScreen;
-            BackColor = Theme.Bg;
+            BackColor = SystemColors.Control;
             Font = new Font("Microsoft YaHei UI", 9F);
-            DoubleBuffered = true;
             KeyPreview = true;
             AllowDrop = true;
             DragEnter += OnDragEnter;
             DragDrop += OnDragDrop;
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape && _busy) CancelClone(); };
-
 
             StyleField(_txtSource);
             StyleField(_txtDest);
@@ -359,14 +270,14 @@ namespace ReFsBlockClone
             _txtSource.DragEnter += OnDragEnter;
             _txtSource.DragDrop += OnDragDrop;
 
-            var btnBrowseSource = GhostButton("btnBrowseSource", "浏览");
+            var btnBrowseSource = BrowseButton("btnBrowseSource", "浏览");
             btnBrowseSource.Click += (s, e) =>
             {
                 string p = UiHooks.PickOpenFile(this, "选择源文件", _txtSource.Text.Trim());
                 if (!string.IsNullOrEmpty(p)) _txtSource.Text = p;
             };
 
-            var btnBrowseDest = GhostButton("btnBrowseDest", "另存为");
+            var btnBrowseDest = BrowseButton("btnBrowseDest", "另存为");
             btnBrowseDest.Click += (s, e) =>
             {
                 string p = UiHooks.PickSaveFile(this, "选择目标路径", _txtDest.Text.Trim());
@@ -384,8 +295,8 @@ namespace ReFsBlockClone
                 _txtDest.Text = p;
             };
 
-            var cardSrc = FileCard("源文件", _txtSource, btnBrowseSource);
-            var cardDst = FileCard("目标文件", _txtDest, btnBrowseDest);
+            var srcGroup = FileGroup("源文件", _txtSource, btnBrowseSource);
+            var dstGroup = FileGroup("目标文件", _txtDest, btnBrowseDest);
 
             _lblVolSrc.AutoSize = false;
             _lblVolSrc.Dock = DockStyle.Fill;
@@ -393,6 +304,7 @@ namespace ReFsBlockClone
             _lblVolSrc.Font = new Font("Microsoft YaHei UI", 8.5F);
             _lblVolSrc.ForeColor = Theme.Muted;
             _lblVolSrc.Text = "源文件：待选择";
+            _lblVolSrc.Margin = new Padding(2, 4, 2, 0);
 
             _lblVolDst.AutoSize = false;
             _lblVolDst.Dock = DockStyle.Fill;
@@ -400,87 +312,105 @@ namespace ReFsBlockClone
             _lblVolDst.Font = new Font("Microsoft YaHei UI", 8.5F);
             _lblVolDst.ForeColor = Theme.Muted;
             _lblVolDst.Text = "目标：待选择";
+            _lblVolDst.Margin = new Padding(2, 0, 2, 2);
 
-            var meta = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Theme.Bg };
-            meta.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            meta.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            var meta = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 1,
+                RowCount = 2,
+                Margin = new Padding(0)
+            };
+            meta.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            meta.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             meta.Controls.Add(_lblVolSrc, 0, 0);
             meta.Controls.Add(_lblVolDst, 0, 1);
 
-            _btnClone = PrimaryButton("btnClone", "开始克隆");
+            _btnClone = ActionButton("btnClone", "开始克隆", 124);
             _btnClone.Enabled = false;
             _btnClone.Click += async (s, e) => await DoCloneAsync();
 
-            _btnCancel = GhostButton("btnCancel", "取消");
-            _btnCancel.BackColor = Theme.Bg;
+            _btnCancel = ActionButton("btnCancel", "取消", 78);
             _btnCancel.Enabled = false;
+            _btnCancel.Margin = new Padding(0, 0, 0, 0);
             _btnCancel.Click += (s, e) => CancelClone();
 
-            _lblPercent.AutoSize = false;
-            _lblPercent.Dock = DockStyle.Fill;
+            _lblPercent.AutoSize = true;
+            _lblPercent.Anchor = AnchorStyles.Right;
             _lblPercent.TextAlign = ContentAlignment.MiddleRight;
-            _lblPercent.Font = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold);
+            _lblPercent.Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
             _lblPercent.ForeColor = Theme.Muted;
             _lblPercent.Text = "";
+            _lblPercent.Margin = new Padding(8, 0, 2, 0);
 
-            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, BackColor = Theme.Bg };
-            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138F));
-            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
+            var actions = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 4,
+                RowCount = 1,
+                Margin = new Padding(0, 6, 0, 6)
+            };
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104F));
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             actions.Controls.Add(_btnClone, 0, 0);
             actions.Controls.Add(_btnCancel, 1, 0);
             actions.Controls.Add(_lblPercent, 3, 0);
 
-            _txtLog.Multiline = true;
-            _txtLog.ReadOnly = true;
-            _txtLog.ScrollBars = ScrollBars.Vertical;
-            _txtLog.Dock = DockStyle.Fill;
-            _txtLog.BorderStyle = BorderStyle.None;
-            _txtLog.Font = new Font("Consolas", 9F);
-            _txtLog.BackColor = Theme.Card;
-            _txtLog.ForeColor = Color.FromArgb(55, 65, 81);
-            _txtLog.Margin = new Padding(0);
+            var logGroup = LogGroup(_txtLog);
 
-            var logCard = new Card { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 14, 12) };
-            var logGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Theme.Card };
-            logGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 20F));
-            logGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            var logCap = Caption("日志");
-            logCap.Dock = DockStyle.Fill;
-            logGrid.Controls.Add(logCap, 0, 0);
-            logGrid.Controls.Add(_txtLog, 0, 1);
-            logCard.Controls.Add(logGrid);
-
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(18, 16, 18, 10), BackColor = Theme.Bg };
+            var root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 5,
+                Padding = new Padding(12, 10, 12, 8),
+                BackColor = SystemColors.Control
+            };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            root.Controls.Add(cardSrc, 0, 0);
-            root.Controls.Add(cardDst, 0, 1);
+            root.Controls.Add(srcGroup, 0, 0);
+            root.Controls.Add(dstGroup, 0, 1);
             root.Controls.Add(meta, 0, 2);
             root.Controls.Add(actions, 0, 3);
-            root.Controls.Add(logCard, 0, 4);
+            root.Controls.Add(logGroup, 0, 4);
 
-            var bar = new Panel { Dock = DockStyle.Bottom, Height = 28, BackColor = Color.White, Padding = new Padding(18, 0, 18, 0) };
-            bar.Paint += (s, e) =>
-            {
-                using (var pen = new Pen(Theme.Border))
-                    e.Graphics.DrawLine(pen, 0, 0, bar.Width, 0);
-            };
-            _status.Dock = DockStyle.Fill;
-            _status.TextAlign = ContentAlignment.MiddleLeft;
-            _status.AutoEllipsis = true;
             _status.Font = new Font("Microsoft YaHei UI", 8.5F);
             _status.ForeColor = Theme.Muted;
             _status.Text = "就绪";
-            bar.Controls.Add(_status);
+            _status.TextAlign = ContentAlignment.MiddleLeft;
+            _status.Spring = true;
+            _status.Margin = new Padding(0);
+            _statusBar.Items.Add(_status);
+            _statusBar.BackColor = SystemColors.Control;
+            _statusBar.Dock = DockStyle.Fill;
+            _statusBar.LayoutStyle = ToolStripLayoutStyle.HorizontalStackWithOverflow;
 
-            Controls.Add(root);
-            Controls.Add(bar);
+            var shell = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                BackColor = SystemColors.Control
+            };
+            shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            shell.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            shell.Controls.Add(root, 0, 0);
+            shell.Controls.Add(_statusBar, 0, 1);
+
+            Controls.Add(shell);
+            srcGroup.Margin = new Padding(0, 0, 0, 6);
+            dstGroup.Margin = new Padding(0, 0, 0, 4);
 
             _txtSource.TextChanged += (s, e) => { SuggestDest(); KickProbe(); UpdateCloneEnabled(); };
             _txtDest.TextChanged += (s, e) => { if (!_settingDest) _destAuto = false; KickProbe(); UpdateCloneEnabled(); };
