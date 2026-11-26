@@ -343,6 +343,20 @@ internal static class GuiSmokeTest
             Application.DoEvents();
             Snap("08-minsize");
 
+            // ---- 150% DPI emulation: scale everything, then grow the window ----
+            var baseSize = _form.Size;
+            _form.Scale(new SizeF(1.5f, 1.5f));
+            _form.Size = new Size((int)(baseSize.Width * 1.5f), (int)(baseSize.Height * 1.5f));
+            Application.DoEvents();
+            Check("dpi150: client grew", _form.ClientSize.Width >= 1000);
+            Check("dpi150: source field usable", Find<TextBox>("txtSource").Width >= 400);
+            Check("dpi150: log keeps height", Find<TextBox>("txtLog").Height >= 80);
+            Check("dpi150: primary button scaled", Find<Button>("btnClone").Width >= 140);
+            Check("dpi150: action row intact",
+                Find<Button>("btnCancel").Left >= Find<Button>("btnClone").Right);
+            Check("dpi150: status bar visible", Find<StatusStrip>("statusStrip").Height >= 18);
+            Snap("09-dpi150");
+
             File.Delete(smallSrc); File.Delete(smallDst);
             File.Delete(bigSrc); File.Delete(bigDst);
 
